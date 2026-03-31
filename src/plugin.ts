@@ -3,7 +3,7 @@ import { TaskDatabase, getDefaultDbPath } from "./lib/db.js";
 import { readAllTasks, getTasksDir, expandPath, setTaskEnabled } from "./lib/tasks.js";
 import { getNextRunTime, isValidCron } from "./lib/cron.js";
 import { isInstalled } from "./lib/installer.js";
-import type { SessionMode } from "./lib/types.js";
+
 
 function getDb(): TaskDatabase {
   return new TaskDatabase(getDefaultDbPath());
@@ -35,14 +35,10 @@ export const ScheduledTasksPlugin: Plugin = async (ctx) => {
           scheduled_at: tool.schema.string(
             "ISO 8601 timestamp for when to run (e.g. '2026-03-31T09:00:00')"
           ),
-          session_mode: tool.schema
-            .enum(["new", "named"])
-            .optional()
-            .describe("Session mode: 'new' creates a fresh session, 'named' reuses one"),
           session_name: tool.schema
             .string()
             .optional()
-            .describe("Session name (required if session_mode is 'named')"),
+            .describe("Session name. If set, reuses the same session across runs. If omitted, creates a fresh session each run."),
           model: tool.schema
             .string()
             .optional()
@@ -71,13 +67,6 @@ export const ScheduledTasksPlugin: Plugin = async (ctx) => {
 
           const cwd = expandPath(args.cwd);
 
-          if (
-            args.session_mode === "named" &&
-            !args.session_name
-          ) {
-            return `Error: session_name is required when session_mode is 'named'.`;
-          }
-
           let permission: any;
           if (args.permission) {
             try {
@@ -94,7 +83,6 @@ export const ScheduledTasksPlugin: Plugin = async (ctx) => {
               prompt: args.prompt,
               cwd,
               scheduledAt: scheduledDate.toISOString(),
-              sessionMode: (args.session_mode as SessionMode) ?? "new",
               sessionName: args.session_name,
               model: args.model,
               agent: args.agent,
@@ -107,8 +95,7 @@ export const ScheduledTasksPlugin: Plugin = async (ctx) => {
               `  Description: ${task.description}\n` +
               `  Scheduled for: ${task.scheduledAt}\n` +
               `  Working directory: ${task.cwd}\n` +
-              `  Session mode: ${task.sessionMode}` +
-              (task.sessionName ? ` (${task.sessionName})` : "") +
+              `  Session: ${task.sessionName ? `named (${task.sessionName})` : "new (fresh each run)"}` +
               schedulerWarning()
             );
           } finally {
@@ -337,8 +324,7 @@ name: daily-cleanup          # Required. Must match filename (without .md)
 description: Clean up old branches  # Required. Human-readable description
 schedule: "0 9 * * *"        # Required. 5-field cron expression
 cwd: ~/projects/my-app       # Required. Working directory (~ is expanded)
-session_mode: named           # Optional. "new" (default) or "named"
-session_name: daily-cleanup   # Required if session_mode is "named"
+session_name: daily-cleanup   # Optional. Reuses the same session across runs. Omit for fresh session each run.
 model: anthropic/claude-sonnet-4-6  # Optional. Model to use
 agent: build                  # Optional. Agent to use
 permission:                   # Optional. Same format as opencode.json permissions
@@ -393,7 +379,7 @@ Common examples:
 - The scheduler daemon must be installed for tasks to run automatically:
   \`npx opencode-scheduler --install\`
 - Tasks use your system's local timezone
-- Tasks with \`session_mode: named\` will reuse the same session across runs
+- Tasks with \`session_name\` set will reuse the same session across runs
 - Use \`enabled: false\` to temporarily disable a task without deleting it${schedulerWarning()}`;
         },
       }),

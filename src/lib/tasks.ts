@@ -1,7 +1,7 @@
 import matter from "gray-matter";
 import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import type { RecurringTask, TaskFrontmatter, SessionMode } from "./types.js";
+import type { RecurringTask, TaskFrontmatter } from "./types.js";
 
 /**
  * Get the default tasks directory path
@@ -54,17 +54,8 @@ function validateFrontmatter(
     errors.push("Missing or invalid 'cwd' field");
   }
 
-  if (data.session_mode !== undefined) {
-    if (data.session_mode !== "new" && data.session_mode !== "named") {
-      errors.push(
-        `Invalid 'session_mode': "${data.session_mode}" (must be "new" or "named")`
-      );
-    }
-    if (data.session_mode === "named" && !data.session_name) {
-      errors.push(
-        "'session_name' is required when 'session_mode' is 'named'"
-      );
-    }
+  if (data.session_name !== undefined && typeof data.session_name !== "string") {
+    errors.push("Invalid 'session_name' field (must be a string)");
   }
 
   if (data.model !== undefined && typeof data.model !== "string") {
@@ -103,7 +94,6 @@ export function parseTaskFile(filePath: string): RecurringTask {
     description: fm.description,
     schedule: fm.schedule,
     cwd: fm.cwd,
-    sessionMode: (fm.session_mode as SessionMode) ?? "new",
     sessionName: fm.session_name,
     model: fm.model,
     agent: fm.agent,

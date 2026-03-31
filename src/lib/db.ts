@@ -7,7 +7,6 @@ import type {
   OneoffTaskStatus,
   PermissionConfig,
   SessionMapping,
-  SessionMode,
   TaskRun,
   TaskRunStatus,
 } from "./types.js";
@@ -124,7 +123,6 @@ export class TaskDatabase {
     prompt: string;
     cwd: string;
     scheduledAt: string;
-    sessionMode?: SessionMode;
     sessionName?: string;
     model?: string;
     agent?: string;
@@ -134,8 +132,8 @@ export class TaskDatabase {
     const id = randomUUID();
     this.db
       .prepare(
-        `INSERT INTO oneoff_tasks (id, description, prompt, cwd, scheduled_at, session_mode, session_name, model, agent, permission, created_by_session)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO oneoff_tasks (id, description, prompt, cwd, scheduled_at, session_name, model, agent, permission, created_by_session)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -143,7 +141,6 @@ export class TaskDatabase {
         task.prompt,
         task.cwd,
         task.scheduledAt,
-        task.sessionMode ?? "new",
         task.sessionName ?? null,
         task.model ?? null,
         task.agent ?? null,
@@ -381,7 +378,6 @@ export class TaskDatabase {
       prompt: row.prompt,
       cwd: row.cwd,
       scheduledAt: row.scheduled_at,
-      sessionMode: row.session_mode as SessionMode,
       sessionName: row.session_name ?? undefined,
       model: row.model ?? undefined,
       agent: row.agent ?? undefined,

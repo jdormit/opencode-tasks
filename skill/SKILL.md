@@ -82,8 +82,7 @@ Key parameters:
 - `cwd` - Working directory (absolute path or `~` for home)
 - `scheduled_at` - ISO 8601 timestamp (e.g., `2026-03-31T09:00:00`)
 - `permission` - JSON string with permission config (see above)
-- `session_mode` - `"new"` (default) or `"named"` (reuse a session)
-- `session_name` - Required if `session_mode` is `"named"`
+- `session_name` - If set, reuses the same session across runs. Omit for fresh session each run.
 - `model` - Optional model override (e.g., `anthropic/claude-sonnet-4-6`)
 - `agent` - Optional agent override
 
@@ -114,7 +113,7 @@ Check status: `npx opencode-scheduler --status`
 
 If the daemon is not installed, warn the user and suggest they install it.
 
-## Session Modes
+## Session Behavior
 
-- `new` (default): Each run creates a fresh session. Good for independent tasks.
-- `named`: Reuses the same session across runs. Good for tasks that build on previous context (e.g., a daily standup that references yesterday's work). Set `session_name` to identify the session.
+- By default (no `session_name`), each run creates a fresh session. Good for independent tasks.
+- If `session_name` is set, the same session is reused across runs. Good for tasks that build on previous context (e.g., a daily standup that references yesterday's work).

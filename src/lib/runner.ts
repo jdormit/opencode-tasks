@@ -53,7 +53,7 @@ export function buildTaskCommand(
   db: TaskDatabase
 ): { args: string[]; env: Record<string, string>; cwd: string } {
   const sessionArgs: string[] = [];
-  if (task.sessionMode === "named" && task.sessionName) {
+  if (task.sessionName) {
     const mapping = db.getSessionMapping(task.sessionName);
     if (mapping) {
       sessionArgs.push("--session", mapping.sessionId);
@@ -165,7 +165,7 @@ export async function execTaskAndUpdateDb(
   const sessionId = parseSessionIdFromJsonOutput(stdout);
 
   // Update session map if needed
-  if (task.sessionMode === "named" && task.sessionName && sessionId) {
+  if (task.sessionName && sessionId) {
     db.upsertSessionMapping(task.sessionName, sessionId, task.name);
   }
 

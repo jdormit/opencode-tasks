@@ -3,7 +3,6 @@ name: daily-cleanup
 description: Clean up merged git branches
 schedule: "0 9 * * *"
 cwd: ~/projects/my-app
-session_mode: named
 session_name: daily-cleanup
 permission:
   bash:

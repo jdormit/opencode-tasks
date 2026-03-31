@@ -11,13 +11,6 @@ export type PermissionRule =
 export type PermissionConfig = Record<string, PermissionRule>;
 
 /**
- * Session mode for task execution.
- * - "new": Create a fresh session for each run
- * - "named": Reuse a session with a specific name (created if it doesn't exist)
- */
-export type SessionMode = "new" | "named";
-
-/**
  * A recurring task definition parsed from a markdown file in ~/.config/opencode/tasks/
  */
 export interface RecurringTask {
@@ -29,9 +22,7 @@ export interface RecurringTask {
   schedule: string;
   /** Working directory for task execution. Supports ~ expansion. */
   cwd: string;
-  /** Whether to reuse a named session or create a new one each run */
-  sessionMode: SessionMode;
-  /** Session name (required if sessionMode is "named") */
+  /** Session name. If set, reuses the same session across runs. If absent, creates a fresh session each run. */
   sessionName?: string;
   /** Model in provider/model format */
   model?: string;
@@ -55,7 +46,6 @@ export interface TaskFrontmatter {
   description: string;
   schedule: string;
   cwd: string;
-  session_mode?: string;
   session_name?: string;
   model?: string;
   agent?: string;
@@ -87,7 +77,6 @@ export interface OneoffTask {
   prompt: string;
   cwd: string;
   scheduledAt: string;
-  sessionMode: SessionMode;
   sessionName?: string;
   model?: string;
   agent?: string;
@@ -134,7 +123,6 @@ export interface TaskExecConfig {
   name: string;
   prompt: string;
   cwd: string;
-  sessionMode: SessionMode;
   sessionName?: string;
   model?: string;
   agent?: string;

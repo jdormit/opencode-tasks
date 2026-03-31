@@ -32,7 +32,7 @@ describe("TaskDatabase", () => {
       expect(task.prompt).toBe("Do something");
       expect(task.cwd).toBe("/tmp");
       expect(task.status).toBe("pending");
-      expect(task.sessionMode).toBe("new");
+      expect(task.sessionName).toBeUndefined();
 
       const retrieved = db.getOneoffTask(task.id);
       expect(retrieved).toEqual(task);
@@ -44,13 +44,11 @@ describe("TaskDatabase", () => {
         prompt: "Do something",
         cwd: "/tmp",
         scheduledAt: "2026-12-31T00:00:00.000Z",
-        sessionMode: "named",
         sessionName: "my-session",
         model: "anthropic/claude-sonnet-4-6",
         agent: "build",
       });
 
-      expect(task.sessionMode).toBe("named");
       expect(task.sessionName).toBe("my-session");
       expect(task.model).toBe("anthropic/claude-sonnet-4-6");
       expect(task.agent).toBe("build");

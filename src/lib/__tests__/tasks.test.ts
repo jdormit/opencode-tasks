@@ -51,7 +51,7 @@ Do the thing.
     expect(task.description).toBe("A test task");
     expect(task.schedule).toBe("0 9 * * *");
     expect(task.cwd).toBe("~/projects");
-    expect(task.sessionMode).toBe("new");
+    expect(task.sessionName).toBeUndefined();
     expect(task.enabled).toBe(true);
     expect(task.prompt).toBe("Do the thing.");
     expect(task.filePath).toBe(filePath);
@@ -66,7 +66,6 @@ name: full-task
 description: A full task
 schedule: "0 9 * * 1-5"
 cwd: ~/projects/app
-session_mode: named
 session_name: my-session
 model: anthropic/claude-sonnet-4-6
 agent: build
@@ -82,7 +81,6 @@ Full prompt here.
     );
 
     const task = parseTaskFile(filePath);
-    expect(task.sessionMode).toBe("named");
     expect(task.sessionName).toBe("my-session");
     expect(task.model).toBe("anthropic/claude-sonnet-4-6");
     expect(task.agent).toBe("build");
@@ -126,24 +124,6 @@ Prompt.
     expect(() => parseTaskFile(filePath)).toThrow("does not match filename");
   });
 
-  it("throws when session_mode is named but session_name is missing", () => {
-    const filePath = join(tmpDir, "no-session.md");
-    writeFileSync(
-      filePath,
-      `---
-name: no-session
-description: test
-schedule: "0 9 * * *"
-cwd: /tmp
-session_mode: named
----
-
-Prompt.
-`
-    );
-
-    expect(() => parseTaskFile(filePath)).toThrow("session_name");
-  });
 });
 
 describe("readAllTasks", () => {
