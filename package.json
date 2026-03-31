@@ -39,7 +39,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jdormit/opencode-scheduled-tasks.git"
+    "url": "git+https://github.com/jdormit/opencode-scheduler.git"
   },
   "engines": {
     "node": ">=18.0.0"
