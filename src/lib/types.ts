@@ -42,7 +42,6 @@ export interface RecurringTask {
  * Task frontmatter as parsed from YAML (before normalization)
  */
 export interface TaskFrontmatter {
-  name: string;
   description?: string;
   schedule: string;
   cwd: string;

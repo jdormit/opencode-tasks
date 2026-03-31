@@ -36,7 +36,6 @@ describe("parseTaskFile", () => {
     writeFileSync(
       filePath,
       `---
-name: test-task
 description: A test task
 schedule: "0 9 * * *"
 cwd: ~/projects
@@ -57,12 +56,28 @@ Do the thing.
     expect(task.filePath).toBe(filePath);
   });
 
+  it("derives name from filename", () => {
+    const filePath = join(tmpDir, "my-cool-task.md");
+    writeFileSync(
+      filePath,
+      `---
+schedule: "0 9 * * *"
+cwd: /tmp
+---
+
+Prompt.
+`
+    );
+
+    const task = parseTaskFile(filePath);
+    expect(task.name).toBe("my-cool-task");
+  });
+
   it("parses a task file without description", () => {
     const filePath = join(tmpDir, "no-desc.md");
     writeFileSync(
       filePath,
       `---
-name: no-desc
 schedule: "0 9 * * *"
 cwd: ~/projects
 ---
@@ -82,7 +97,6 @@ Do the thing.
     writeFileSync(
       filePath,
       `---
-name: full-task
 description: A full task
 schedule: "0 9 * * 1-5"
 cwd: ~/projects/app
@@ -101,6 +115,7 @@ Full prompt here.
     );
 
     const task = parseTaskFile(filePath);
+    expect(task.name).toBe("full-task");
     expect(task.sessionName).toBe("my-session");
     expect(task.model).toBe("anthropic/claude-sonnet-4-6");
     expect(task.agent).toBe("build");
@@ -116,7 +131,7 @@ Full prompt here.
     writeFileSync(
       filePath,
       `---
-name: bad-task
+description: has description but no schedule or cwd
 ---
 
 Missing fields.
@@ -125,25 +140,6 @@ Missing fields.
 
     expect(() => parseTaskFile(filePath)).toThrow("Invalid task file");
   });
-
-  it("throws when name doesn't match filename", () => {
-    const filePath = join(tmpDir, "mismatch.md");
-    writeFileSync(
-      filePath,
-      `---
-name: wrong-name
-description: test
-schedule: "0 9 * * *"
-cwd: /tmp
----
-
-Prompt.
-`
-    );
-
-    expect(() => parseTaskFile(filePath)).toThrow("does not match filename");
-  });
-
 });
 
 describe("readAllTasks", () => {
@@ -151,8 +147,6 @@ describe("readAllTasks", () => {
     writeFileSync(
       join(tmpDir, "task-a.md"),
       `---
-name: task-a
-description: Task A
 schedule: "0 9 * * *"
 cwd: /tmp
 ---
@@ -164,8 +158,6 @@ Prompt A.
     writeFileSync(
       join(tmpDir, "task-b.md"),
       `---
-name: task-b
-description: Task B
 schedule: "0 10 * * *"
 cwd: /tmp
 ---
@@ -184,8 +176,6 @@ Prompt B.
     writeFileSync(
       join(tmpDir, "good.md"),
       `---
-name: good
-description: Good task
 schedule: "0 9 * * *"
 cwd: /tmp
 ---
@@ -216,8 +206,6 @@ describe("setTaskEnabled", () => {
     writeFileSync(
       filePath,
       `---
-name: toggle
-description: Toggle task
 schedule: "0 9 * * *"
 cwd: /tmp
 enabled: true

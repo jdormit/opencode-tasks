@@ -31,17 +31,6 @@ function validateFrontmatter(
 ): string[] {
   const errors: string[] = [];
 
-  if (!data.name || typeof data.name !== "string") {
-    errors.push("Missing or invalid 'name' field");
-  } else {
-    const expectedName = fileName.replace(/\.md$/, "");
-    if (data.name !== expectedName) {
-      errors.push(
-        `'name' field "${data.name}" does not match filename "${expectedName}"`
-      );
-    }
-  }
-
   if (data.description !== undefined && typeof data.description !== "string") {
     errors.push("Invalid 'description' field (must be a string)");
   }
@@ -89,8 +78,10 @@ export function parseTaskFile(filePath: string): RecurringTask {
     );
   }
 
+  const name = fileName.replace(/\.md$/, "");
+
   return {
-    name: fm.name,
+    name,
     description: fm.description,
     schedule: fm.schedule,
     cwd: fm.cwd,

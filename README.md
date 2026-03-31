@@ -34,8 +34,6 @@ Create a task file at `~/.config/opencode/tasks/daily-standup.md`:
 
 ```yaml
 ---
-name: daily-standup
-description: Summarize yesterday's git activity
 schedule: "0 9 * * 1-5"
 cwd: ~/projects/my-app
 ---
@@ -48,7 +46,7 @@ That's it. The scheduler will run this task every weekday at 9 AM.
 
 ## Recurring tasks
 
-Recurring tasks are markdown files in `~/.config/opencode/tasks/`. The filename must match the `name` field (e.g., `daily-standup.md` has `name: daily-standup`).
+Recurring tasks are markdown files in `~/.config/opencode/tasks/`. The filename (without `.md`) is used as the task name.
 
 The file has YAML frontmatter followed by the prompt that gets sent to the agent.
 
@@ -56,7 +54,6 @@ The file has YAML frontmatter followed by the prompt that gets sent to the agent
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `name` | string | yes | — | Unique identifier. Must match the filename (without `.md`). |
 | `description` | string | no | — | Human-readable description. |
 | `schedule` | string | yes | — | 5-field cron expression. Uses system local timezone. |
 | `cwd` | string | yes | — | Working directory. Supports `~` expansion. |
@@ -92,7 +89,6 @@ The file has YAML frontmatter followed by the prompt that gets sent to the agent
 
 ```yaml
 ---
-name: daily-cleanup
 description: Clean up merged git branches
 schedule: "0 9 * * *"
 cwd: ~/projects/my-app
@@ -112,7 +108,6 @@ List any branches that look stale but haven't been merged yet.
 
 ```yaml
 ---
-name: weekly-report
 description: Generate a weekly summary of project activity
 schedule: "0 8 * * 1"
 cwd: ~/projects/my-app

@@ -1,5 +1,4 @@
 ---
-name: daily-cleanup
 description: Clean up merged git branches
 schedule: "0 9 * * *"
 cwd: ~/projects/my-app

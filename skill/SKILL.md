@@ -91,7 +91,7 @@ Key parameters:
 Recurring tasks are markdown files in `~/.config/opencode/tasks/`. Use `get_task_instructions` to get the full frontmatter format, then create the file using file tools.
 
 Key points:
-- Filename must match the `name` field (e.g., `daily-cleanup.md` has `name: daily-cleanup`)
+- The filename (without `.md`) is the task name (e.g., `daily-cleanup.md` -> task name `daily-cleanup`)
 - `schedule` is a 5-field cron expression (minute hour day-of-month month day-of-week)
 - The markdown body is the prompt sent to the agent
 - Set `enabled: false` to temporarily disable without deleting

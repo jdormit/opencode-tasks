@@ -1,5 +1,4 @@
 ---
-name: weekly-report
 description: Generate a weekly summary of project activity
 schedule: "0 8 * * 1"
 cwd: ~/projects/my-app

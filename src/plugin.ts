@@ -314,13 +314,12 @@ export const ScheduledTasksPlugin: Plugin = async (ctx) => {
 Recurring tasks are defined as markdown files in:
   ${tasksDir}
 
-Each file should be named after the task (e.g., \`daily-cleanup.md\`) and contain YAML frontmatter followed by the prompt.
+The filename (without \`.md\`) is used as the task name. Each file contains YAML frontmatter followed by the prompt.
 
 ### Frontmatter Format
 
 \`\`\`yaml
 ---
-name: daily-cleanup          # Required. Must match filename (without .md)
 description: Clean up old branches  # Optional. Human-readable description
 schedule: "0 9 * * *"        # Required. 5-field cron expression
 cwd: ~/projects/my-app       # Required. Working directory (~ is expanded)
