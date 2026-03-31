@@ -13,7 +13,7 @@
     }
   },
   "bin": {
-    "opencode-scheduler": "./dist/cli.js"
+    "opencode-scheduler": "dist/cli.js"
   },
   "files": [
     "dist",
