@@ -1,6 +1,6 @@
 {
   "name": "opencode-tasks",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Scheduled task runner plugin for OpenCode - cron-based recurring and one-off task scheduling",
   "type": "module",
   "main": "./dist/plugin.js",
