@@ -161,35 +161,29 @@ permission:
     "~/other-project/*": "allow"
 ```
 
-For one-off tasks, pass permissions as a JSON string to the `schedule_task` tool:
-
-```json
-{"bash": {"*": "allow"}, "external_directory": {"/tmp/*": "allow"}}
-```
-
 ### Rule of thumb
 
 Ask: "Will this task touch any files outside its `cwd`?" If yes, add `external_directory` rules.
 
 ## CLI reference
 
-The `opencode-scheduler` CLI manages the scheduler daemon and provides task visibility.
+The `opencode-scheduler` CLI manages the scheduler daemon and provides task visibility. All commands are available via `npx`.
 
 ```
-opencode-scheduler                  Run one scheduler tick (default)
-opencode-scheduler --run-once       Run one scheduler tick (explicit)
-opencode-scheduler --install        Install the system scheduler (launchd/systemd)
-opencode-scheduler --uninstall      Remove the system scheduler
-opencode-scheduler --install-skill  Install the scheduled-tasks agent skill
-opencode-scheduler --status         Show scheduler and task status
-opencode-scheduler --list           List all tasks with next run times
-opencode-scheduler --help           Show help
+npx opencode-scheduler --install        Install the system scheduler (launchd/systemd)
+npx opencode-scheduler --uninstall      Remove the system scheduler
+npx opencode-scheduler --install-skill  Install the scheduled-tasks agent skill
+npx opencode-scheduler --status         Show scheduler and task status
+npx opencode-scheduler --list           List all tasks with next run times
+npx opencode-scheduler --help           Show help
 ```
 
-All commands are also available via `npx`:
+The following commands are used internally by the scheduler daemon and generally don't need to be run manually:
 
-```bash
-npx opencode-scheduler --status
+```
+opencode-scheduler                      Run one scheduler tick
+opencode-scheduler --run-once           Run one scheduler tick (explicit)
+opencode-scheduler --exec-task <id>     Execute a specific task (used by worker processes)
 ```
 
 ### Example output
