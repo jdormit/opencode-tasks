@@ -13,7 +13,13 @@ import {
   install,
   uninstall,
   getInstallInfo,
+  isInstalled,
 } from "./lib/installer.js";
+import {
+  scheduleOneoffTask,
+  formatScheduledTaskMessage,
+  ScheduleTaskError,
+} from "./lib/schedule.js";
 import type { TaskExecConfig } from "./lib/types.js";
 
 /** Absolute path to this script (used to spawn worker subprocesses) */
@@ -395,20 +401,260 @@ function doInstallSkill(srcPath: string): void {
   console.log("Agents will automatically discover it and can load it when relevant.");
 }
 
+// --- --schedule-task command ---
+
+interface ScheduleTaskFlags {
+  prompt?: string;
+  description?: string;
+  cwd?: string;
+  task?: string;
+  at?: string;
+  now: boolean;
+  sessionName?: string;
+  model?: string;
+  agent?: string;
+  permission?: string;
+  help: boolean;
+}
+
+const SCHEDULE_TASK_VALUE_FLAGS: Record<string, keyof ScheduleTaskFlags> = {
+  "--prompt": "prompt",
+  "--description": "description",
+  "--cwd": "cwd",
+  "--task": "task",
+  "--at": "at",
+  "--session-name": "sessionName",
+  "--model": "model",
+  "--agent": "agent",
+  "--permission": "permission",
+};
+
+/**
+ * Parse the args following `--schedule-task`. Supports both
+ * `--flag value` and `--flag=value` forms.
+ *
+ * Throws on unknown flags or missing values.
+ */
+export function parseScheduleTaskArgs(args: string[]): ScheduleTaskFlags {
+  const flags: ScheduleTaskFlags = { now: false, help: false };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--now") {
+      flags.now = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      flags.help = true;
+      continue;
+    }
+
+    // Support --flag=value
+    let name = arg;
+    let inlineValue: string | undefined;
+    const eqIdx = arg.indexOf("=");
+    if (arg.startsWith("--") && eqIdx !== -1) {
+      name = arg.slice(0, eqIdx);
+      inlineValue = arg.slice(eqIdx + 1);
+    }
+
+    const key = SCHEDULE_TASK_VALUE_FLAGS[name];
+    if (!key) {
+      throw new Error(`Unknown flag: ${arg}`);
+    }
+
+    let value: string | undefined;
+    if (inlineValue !== undefined) {
+      value = inlineValue;
+    } else {
+      value = args[++i];
+      if (value === undefined) {
+        throw new Error(`Flag ${name} requires a value`);
+      }
+    }
+
+    (flags as any)[key] = value;
+  }
+
+  return flags;
+}
+
+async function scheduleTaskCommand(args: string[]): Promise<void> {
+  let flags: ScheduleTaskFlags;
+  try {
+    flags = parseScheduleTaskArgs(args);
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    printScheduleTaskUsage();
+    process.exit(1);
+  }
+
+  if (flags.help) {
+    printScheduleTaskUsage();
+    return;
+  }
+
+  // Mutually exclusive: --prompt vs --task
+  if (flags.prompt && flags.task) {
+    console.error("Error: --prompt and --task are mutually exclusive.");
+    process.exit(1);
+  }
+  if (!flags.prompt && !flags.task) {
+    console.error("Error: one of --prompt or --task is required.");
+    printScheduleTaskUsage();
+    process.exit(1);
+  }
+
+  // Mutually exclusive: --at vs --now
+  if (flags.at && flags.now) {
+    console.error("Error: --at and --now are mutually exclusive.");
+    process.exit(1);
+  }
+
+  // Build the schedule options. When neither --at nor --now is given,
+  // we default to --now (no scheduledAt -> "now" in the helper).
+  const scheduledAt = flags.at;
+
+  let description: string;
+  let prompt: string;
+  let cwd: string;
+  let sessionName: string | undefined;
+  let model: string | undefined;
+  let agent: string | undefined;
+  let permission: string | undefined;
+
+  if (flags.task) {
+    const { tasks, errors } = readAllTasks();
+    if (errors.length > 0) {
+      for (const { file, error } of errors) {
+        console.error(`Warning: error in task file "${file}": ${error}`);
+      }
+    }
+    const recurring = tasks.find((t) => t.name === flags.task);
+    if (!recurring) {
+      console.error(`Error: no recurring task found with name "${flags.task}".`);
+      if (tasks.length > 0) {
+        console.error("Available tasks:");
+        for (const t of tasks) {
+          console.error(`  ${t.name}`);
+        }
+      } else {
+        console.error("(No recurring tasks defined.)");
+      }
+      process.exit(1);
+    }
+
+    prompt = recurring.prompt;
+    cwd = flags.cwd ?? recurring.cwd;
+    description =
+      flags.description ?? `Ad-hoc run of recurring task: ${recurring.name}`;
+    sessionName = flags.sessionName ?? recurring.sessionName;
+    model = flags.model ?? recurring.model;
+    agent = flags.agent ?? recurring.agent;
+    permission =
+      flags.permission ??
+      (recurring.permission ? JSON.stringify(recurring.permission) : undefined);
+  } else {
+    if (!flags.description) {
+      console.error("Error: --description is required when using --prompt.");
+      process.exit(1);
+    }
+    if (!flags.cwd) {
+      console.error("Error: --cwd is required when using --prompt.");
+      process.exit(1);
+    }
+    prompt = flags.prompt!;
+    description = flags.description;
+    cwd = flags.cwd;
+    sessionName = flags.sessionName;
+    model = flags.model;
+    agent = flags.agent;
+    permission = flags.permission;
+  }
+
+  const db = new TaskDatabase(getDefaultDbPath());
+  try {
+    const task = scheduleOneoffTask(db, {
+      description,
+      prompt,
+      cwd,
+      scheduledAt,
+      sessionName,
+      model,
+      agent,
+      permission,
+      // CLI accepts past dates (--now produces a current ISO that may
+      // slip a few ms past by the time it's compared).
+      rejectPastDate: false,
+    });
+    console.log(formatScheduledTaskMessage(task));
+
+    if (!isInstalled()) {
+      console.error("");
+      console.error(
+        "Warning: the opencode-tasks daemon is not installed. Tasks will only execute"
+      );
+      console.error(
+        "when the scheduler is run manually (e.g. `opencode-tasks --run-once`)."
+      );
+      console.error("Install the daemon with: bunx opencode-tasks --install");
+    }
+  } catch (err) {
+    if (err instanceof ScheduleTaskError) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
+  } finally {
+    db.close();
+  }
+}
+
 function printUsage(): void {
   console.log(`opencode-tasks - CLI for OpenCode scheduled tasks
 
 Usage:
-  opencode-tasks --run-once     Run one scheduler tick
-  opencode-tasks --install      Install the system scheduler (launchd/systemd)
-  opencode-tasks --uninstall    Remove the system scheduler
-  opencode-tasks --install-skill  Install the scheduled-tasks agent skill
-  opencode-tasks --status       Show scheduler and task status
-  opencode-tasks --list         List all tasks with next run times
-  opencode-tasks --help         Show this help message
+  opencode-tasks --run-once         Run one scheduler tick
+  opencode-tasks --install          Install the system scheduler (launchd/systemd)
+  opencode-tasks --uninstall        Remove the system scheduler
+  opencode-tasks --install-skill    Install the scheduled-tasks agent skill
+  opencode-tasks --status           Show scheduler and task status
+  opencode-tasks --list             List all tasks with next run times
+  opencode-tasks --schedule-task    Schedule a one-off task
+                                    (use --schedule-task --help for options)
+  opencode-tasks --help             Show this help message
+`);
+}
 
-Internal (used by spawned workers):
-  opencode-tasks --exec-task <runId> [--oneoff]
+function printScheduleTaskUsage(): void {
+  console.log(`opencode-tasks --schedule-task - Schedule a one-off task
+
+Usage:
+  Ad-hoc prompt:
+    opencode-tasks --schedule-task --prompt <text> --description <text> \\
+      --cwd <path> [timing] [options]
+
+  Run an existing recurring task as a one-off:
+    opencode-tasks --schedule-task --task <name> [timing] [options]
+
+Timing (defaults to --now if omitted):
+  --at <iso>                ISO 8601 timestamp to run at (must be in the future)
+  --now                     Enqueue to run on the next scheduler tick
+
+Options:
+  --description <text>      Human-readable description (required with --prompt;
+                            optional with --task, defaults to a generated label)
+  --cwd <path>              Working directory (~ expanded; required with --prompt)
+  --session-name <name>     Reuse a named session across runs
+  --model <provider/model>  Model to use
+  --agent <name>            Agent to use
+  --permission <json>       JSON string matching opencode.json permission schema
+  --help                    Show this help
+
+Notes:
+  When --task is used, the recurring task's prompt, cwd, model, agent,
+  permission, and session_name are copied into the new one-off. Any of those
+  fields can be overridden by passing the matching flag.
 `);
 }
 
@@ -433,6 +679,9 @@ async function main(): Promise<void> {
       break;
     case "--list":
       listTasks();
+      break;
+    case "--schedule-task":
+      await scheduleTaskCommand(args.slice(1));
       break;
     case "--help":
     case "-h":
@@ -461,7 +710,14 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err.message ?? err);
-  process.exit(1);
-});
+// Only run main() when this file is executed directly, not when imported
+// (e.g. by tests). Compares the resolved entry point to this module's URL.
+const entryUrl = process.argv[1]
+  ? new URL(`file://${process.argv[1]}`).href
+  : undefined;
+if (entryUrl === import.meta.url) {
+  main().catch((err) => {
+    console.error("Fatal error:", err.message ?? err);
+    process.exit(1);
+  });
+}

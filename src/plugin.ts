@@ -1,8 +1,13 @@
 import { type Plugin, tool } from "@opencode-ai/plugin";
 import { TaskDatabase, getDefaultDbPath } from "./lib/db.js";
-import { readAllTasks, getTasksDir, expandPath, setTaskEnabled } from "./lib/tasks.js";
+import { readAllTasks, getTasksDir, setTaskEnabled } from "./lib/tasks.js";
 import { getNextRunTime, isValidCron } from "./lib/cron.js";
 import { isInstalled } from "./lib/installer.js";
+import {
+  scheduleOneoffTask,
+  formatScheduledTaskMessage,
+  ScheduleTaskError,
+} from "./lib/schedule.js";
 
 
 function getDb(): TaskDatabase {
@@ -55,49 +60,25 @@ export const ScheduledTasksPlugin: Plugin = async (ctx) => {
             ),
         },
         async execute(args) {
-          // Validate
-          const scheduledDate = new Date(args.scheduled_at);
-          if (isNaN(scheduledDate.getTime())) {
-            return `Error: Invalid date format "${args.scheduled_at}". Use ISO 8601 format (e.g. '2026-03-31T09:00:00').`;
-          }
-
-          if (scheduledDate <= new Date()) {
-            return `Error: Scheduled time "${args.scheduled_at}" is in the past.`;
-          }
-
-          const cwd = expandPath(args.cwd);
-
-          let permission: any;
-          if (args.permission) {
-            try {
-              permission = JSON.parse(args.permission);
-            } catch {
-              return `Error: Invalid permission JSON: ${args.permission}`;
-            }
-          }
-
           const db = getDb();
           try {
-            const task = db.createOneoffTask({
+            const task = scheduleOneoffTask(db, {
               description: args.description,
               prompt: args.prompt,
-              cwd,
-              scheduledAt: scheduledDate.toISOString(),
+              cwd: args.cwd,
+              scheduledAt: args.scheduled_at,
               sessionName: args.session_name,
               model: args.model,
               agent: args.agent,
-              permission,
+              permission: args.permission,
+              rejectPastDate: true,
             });
-
-            return (
-              `Task scheduled successfully!\n` +
-              `  ID: ${task.id}\n` +
-              `  Description: ${task.description}\n` +
-              `  Scheduled for: ${task.scheduledAt}\n` +
-              `  Working directory: ${task.cwd}\n` +
-              `  Session: ${task.sessionName ? `named (${task.sessionName})` : "new (fresh each run)"}` +
-              schedulerWarning()
-            );
+            return formatScheduledTaskMessage(task) + schedulerWarning();
+          } catch (err) {
+            if (err instanceof ScheduleTaskError) {
+              return `Error: ${err.message}`;
+            }
+            throw err;
           } finally {
             db.close();
           }
