@@ -19,6 +19,8 @@ You have access to tools for scheduling OpenCode tasks. Tasks can be one-off (ru
 
 **This is critical.** Scheduled tasks run via `opencode run` in the background with no user present to approve permission prompts. Any permission set to `"ask"` (the default for some permissions) will effectively be denied.
 
+**Rule of thumb: never use `"ask"` in a scheduled task.** There is nobody around to answer the prompt. Use `"allow"` for things the task should be able to do and `"deny"` for things it shouldn't. If you find yourself reaching for `"ask"`, you almost certainly want `"deny"` instead.
+
 You MUST explicitly set permissions for any operations the task needs to perform. The most commonly needed permissions are:
 
 ### `bash` permission
@@ -66,6 +68,28 @@ permission:
   external_directory:
     "/tmp/*": "allow"
     "~/other-project/*": "allow"
+```
+
+### Rule order matters — put `"*"` first, specifics after
+
+OpenCode evaluates permission rules **in declaration order**, and the **last matching rule wins**. This is the opposite of the "most specific rule wins" behavior in many other systems. The catch-all `"*"` pattern, if placed *last*, will silently override every more-specific rule above it.
+
+This trap is especially dangerous in scheduled tasks because a misordered `"*": "ask"` will deny everything (since there's no one to answer the prompt), even commands you explicitly tried to allow.
+
+```yaml
+# BAD — "git" is supposedly allowed, but the trailing "*" rule wins.
+# Every git command effectively becomes "ask", which means denied.
+bash:
+  "git *": "allow"
+  "rg *": "allow"
+  "*": "ask"
+
+# GOOD — catch-all goes first; specifics override it.
+# (And in a scheduled task, prefer "deny" over "ask" for the catch-all.)
+bash:
+  "*": "deny"
+  "git *": "allow"
+  "rg *": "allow"
 ```
 
 ### Rule of thumb

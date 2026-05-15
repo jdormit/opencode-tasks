@@ -324,6 +324,22 @@ The prompt goes here. This is what will be sent to the opencode agent when the t
 
 Since scheduled tasks run in the background with no user present, any permission set to \`"ask"\` will effectively be **denied**. You must explicitly allow any operations the task needs.
 
+**Never use \`"ask"\` in a scheduled task.** There is nobody around to answer the prompt. Use \`"allow"\` for things the task should be able to do and \`"deny"\` for things it shouldn't. If you find yourself reaching for \`"ask"\`, you almost certainly want \`"deny"\`.
+
+**Rule order matters.** OpenCode evaluates permission rules in declaration order, and the **last matching rule wins** — not the most specific. Put the catch-all \`"*"\` rule first, and put more-specific overrides after it. If you flip the order, the catch-all will silently override every specific rule above it:
+
+\`\`\`yaml
+# WRONG — "*": "deny" comes last and overrides "git *": "allow".
+bash:
+  "git *": "allow"
+  "*": "deny"
+
+# RIGHT — catch-all first, specifics after.
+bash:
+  "*": "deny"
+  "git *": "allow"
+\`\`\`
+
 **Most commonly missed: \`external_directory\`** - This defaults to \`"ask"\` and controls access to files outside the task's \`cwd\`. If your task writes to \`/tmp\`, reads from another project, or accesses any path outside \`cwd\`, you MUST add an \`external_directory\` rule:
 
 \`\`\`yaml

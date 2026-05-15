@@ -146,7 +146,30 @@ The agent will call `schedule_task` with the appropriate prompt, time, working d
 
 Scheduled tasks run in the background with no user present. Any permission set to `"ask"` will effectively be **denied** since there's nobody to approve the prompt.
 
+**Don't use `"ask"` in a scheduled task.** Use `"allow"` for things the task needs to do and `"deny"` for things it shouldn't. There is no third option in a non-interactive session.
+
 Most permissions (`bash`, `edit`, `read`) default to `"allow"` and work fine without explicit configuration.
+
+### Rule order matters
+
+OpenCode evaluates permission rules in declaration order, and the **last matching rule wins** — not the most specific. This is the opposite of how many other permission systems work, and it's a common source of confusion.
+
+In practice: put the catch-all `"*"` rule *first*, and put more specific overrides *after* it. If you flip the order, the catch-all will silently override every specific rule above it.
+
+```yaml
+# WRONG — "*": "deny" comes last, so it overrides "git *": "allow".
+# git commands will be denied at runtime.
+bash:
+  "git *": "allow"
+  "*": "deny"
+
+# RIGHT — catch-all first, specifics after.
+bash:
+  "*": "deny"
+  "git *": "allow"
+```
+
+The example task above (`"*": "allow"` followed by `"git push *": "deny"`) follows this pattern: the catch-all allows everything, and the more specific deny rule comes after to carve out an exception.
 
 ### `external_directory` — the common gotcha
 
