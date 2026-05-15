@@ -142,6 +142,45 @@ Example agent interaction:
 
 The agent will call `schedule_task` with the appropriate prompt, time, working directory, and permissions.
 
+## Session loops (`/loop`)
+
+`/loop` schedules a recurring prompt that fires **inside the current session** on a fixed interval. It's modeled after Claude Code's `/loop` and is meant for in-session automation: polling a deployment, waiting on CI, watching a long-running process. Unlike recurring/one-off tasks, loops post into the active opencode session and don't spawn new ones.
+
+Install the slash commands the first time (also installed by `--install-skill`):
+
+```bash
+bunx opencode-tasks --install-commands
+```
+
+| Command | What it does |
+|---------|--------------|
+| `/loop 5m check the deploy` | Posts "check the deploy" into this session every 5 minutes. |
+| `/loop check the deploy` | Same, with the default interval (5m). |
+| `/loop 5m` | Default maintenance prompt, every 5 minutes. |
+| `/loop` | Default interval and prompt. |
+| `/loop-list` | List active loops in this session. |
+| `/loop-stop <id>` | Stop a specific loop. |
+| `/loop-stop` | Stop every loop in this session. |
+
+Interval format: `<N><unit>` where unit is `m` (minutes, 1–59), `h` (hours, 1–23), or `d` (days, 1–31). Sub-minute intervals are not supported (opencode's cron is minute-resolution).
+
+### Lifecycle
+
+- Loops are persisted to SQLite, so they survive `opencode --resume` — the plugin re-arms timers the first time it sees an event for that session.
+- Each loop has a default 3-day expiry, after which it auto-disables.
+- When a session is deleted, its loops are cleaned up automatically.
+- Timers live in the plugin process; they only fire while opencode is running with that session open.
+
+### Differences from recurring tasks
+
+| | Recurring task | Session loop |
+|---|---|---|
+| Where it runs | A fresh `opencode run` subprocess | Inside the active session |
+| Driver | OS scheduler daemon (launchd/systemd) | Plugin in-process timers |
+| Requires opencode open? | No | Yes |
+| Survives restart? | Yes | Yes (re-armed via `--resume`) |
+| Defined by | Markdown file in `~/.config/opencode/tasks/` | `/loop` slash command |
+
 ## Permissions
 
 Scheduled tasks run in the background with no user present. Any permission set to `"ask"` will effectively be **denied** since there's nobody to approve the prompt.
@@ -193,12 +232,14 @@ Ask: "Will this task touch any files outside its `cwd`?" If yes, add `external_d
 The `opencode-tasks` CLI manages the scheduler daemon and provides task visibility. All commands are available via `bunx`.
 
 ```
-bunx opencode-tasks --install        Install the system scheduler (launchd/systemd)
-bunx opencode-tasks --uninstall      Remove the system scheduler
-bunx opencode-tasks --install-skill  Install the scheduled-tasks agent skill
-bunx opencode-tasks --status         Show scheduler and task status
-bunx opencode-tasks --list           List all tasks with next run times
-bunx opencode-tasks --help           Show help
+bunx opencode-tasks --install            Install the system scheduler (launchd/systemd)
+bunx opencode-tasks --uninstall          Remove the system scheduler
+bunx opencode-tasks --install-skill      Install the scheduled-tasks agent skill
+                                         (also installs the /loop slash commands)
+bunx opencode-tasks --install-commands   Install just the /loop slash commands
+bunx opencode-tasks --status             Show scheduler and task status
+bunx opencode-tasks --list               List all tasks with next run times
+bunx opencode-tasks --help               Show help
 ```
 
 The following commands are used internally by the scheduler daemon and generally don't need to be run manually:
@@ -300,18 +341,21 @@ bun test --watch
 ```
 src/
   cli.ts              # CLI entry point (opencode-tasks)
-  plugin.ts           # OpenCode plugin entry point
+  plugin.ts           # OpenCode plugin entry point + /loop command handlers
   lib/
     types.ts          # Shared TypeScript types
     db.ts             # SQLite database (schema, migrations, CRUD)
     sqlite.ts         # SQLite abstraction (bun:sqlite)
     tasks.ts          # Task file parser (frontmatter validation)
     cron.ts           # Cron evaluation (isDue, nextRunTime)
+    loops.ts          # /loop argument parsing + interval/cron helpers
+    loop-runtime.ts   # In-process timer runtime for session loops
     runner.ts         # Task execution (spawn workers, run opencode)
     installer.ts      # Platform detection + launchd/systemd installation
     __tests__/        # Unit tests
 examples/             # Example task files
 skill/                # Agent skill (SKILL.md)
+commands/             # Slash command markdown (/loop, /loop-stop, /loop-list)
 ```
 
 ## License

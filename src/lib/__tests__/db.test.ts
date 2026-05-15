@@ -300,6 +300,179 @@ describe("TaskDatabase", () => {
     });
   });
 
+  describe("session loops", () => {
+    it("creates and retrieves a session loop", () => {
+      const loop = db.createSessionLoop({
+        sessionId: "ses_abc",
+        prompt: "check the deploy",
+        schedule: "*/5 * * * *",
+        intervalLabel: "5m",
+        cwd: "/tmp",
+      });
+
+      expect(loop.id).toBeDefined();
+      expect(loop.sessionId).toBe("ses_abc");
+      expect(loop.prompt).toBe("check the deploy");
+      expect(loop.schedule).toBe("*/5 * * * *");
+      expect(loop.intervalLabel).toBe("5m");
+      expect(loop.cwd).toBe("/tmp");
+      expect(loop.enabled).toBe(true);
+      expect(loop.lastRunAt).toBeUndefined();
+      expect(loop.expiresAt).toBeUndefined();
+
+      const fetched = db.getSessionLoop(loop.id);
+      expect(fetched).toEqual(loop);
+    });
+
+    it("stores expiresAt when provided", () => {
+      const exp = "2030-01-01T00:00:00.000Z";
+      const loop = db.createSessionLoop({
+        sessionId: "ses_abc",
+        prompt: "p",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+        expiresAt: exp,
+      });
+      expect(loop.expiresAt).toBe(exp);
+    });
+
+    it("lists loops for a session in creation order", () => {
+      const a = db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p1",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+      const b = db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p2",
+        schedule: "*/10 * * * *",
+        cwd: "/tmp",
+      });
+      db.createSessionLoop({
+        sessionId: "ses_b",
+        prompt: "other",
+        schedule: "*/1 * * * *",
+        cwd: "/tmp",
+      });
+
+      const listed = db.listLoopsForSession("ses_a");
+      expect(listed).toHaveLength(2);
+      expect(listed.map((l) => l.id)).toEqual([a.id, b.id]);
+    });
+
+    it("listEnabledLoopsForSession skips disabled rows", () => {
+      const a = db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p1",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+      const b = db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p2",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+
+      db.disableSessionLoop(a.id);
+
+      const enabled = db.listEnabledLoopsForSession("ses_a");
+      expect(enabled).toHaveLength(1);
+      expect(enabled[0].id).toBe(b.id);
+    });
+
+    it("setLoopLastRun updates the lastRunAt column", () => {
+      const loop = db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+      db.setLoopLastRun(loop.id, "2026-05-15T12:34:56.000Z");
+      const refreshed = db.getSessionLoop(loop.id)!;
+      expect(refreshed.lastRunAt).toBe("2026-05-15T12:34:56.000Z");
+    });
+
+    it("disableSessionLoop flips enabled to false and is idempotent", () => {
+      const loop = db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+      expect(db.disableSessionLoop(loop.id)).toBe(true);
+      expect(db.getSessionLoop(loop.id)!.enabled).toBe(false);
+      expect(db.disableSessionLoop(loop.id)).toBe(false);
+    });
+
+    it("disableLoopsForSession returns the number disabled", () => {
+      db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p1",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+      db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p2",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+      db.createSessionLoop({
+        sessionId: "ses_b",
+        prompt: "other",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+
+      const n = db.disableLoopsForSession("ses_a");
+      expect(n).toBe(2);
+      expect(db.listEnabledLoopsForSession("ses_a")).toHaveLength(0);
+      // Doesn't touch the other session.
+      expect(db.listEnabledLoopsForSession("ses_b")).toHaveLength(1);
+    });
+
+    it("deleteLoopsForSession removes all rows for that session", () => {
+      db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p1",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+      db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p2",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+      const other = db.createSessionLoop({
+        sessionId: "ses_b",
+        prompt: "other",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+
+      const n = db.deleteLoopsForSession("ses_a");
+      expect(n).toBe(2);
+      expect(db.listLoopsForSession("ses_a")).toHaveLength(0);
+      // Other session is untouched.
+      expect(db.getSessionLoop(other.id)).toBeDefined();
+    });
+
+    it("deleteSessionLoop deletes a single row", () => {
+      const loop = db.createSessionLoop({
+        sessionId: "ses_a",
+        prompt: "p",
+        schedule: "*/5 * * * *",
+        cwd: "/tmp",
+      });
+      expect(db.deleteSessionLoop(loop.id)).toBe(true);
+      expect(db.getSessionLoop(loop.id)).toBeUndefined();
+      expect(db.deleteSessionLoop(loop.id)).toBe(false);
+    });
+  });
+
   describe("stale cleanup", () => {
     it("cleans up stale running records", () => {
       // Create a running task run with old timestamp

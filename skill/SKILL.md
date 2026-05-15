@@ -141,3 +141,26 @@ If the daemon is not installed, warn the user and suggest they install it.
 
 - By default (no `session_name`), each run creates a fresh session. Good for independent tasks.
 - If `session_name` is set, the same session is reused across runs. Good for tasks that build on previous context (e.g., a daily standup that references yesterday's work).
+
+## Session Loops (`/loop`)
+
+There's a third scheduling primitive aimed at the active user session: `/loop`. Unlike recurring or one-off tasks (which spawn new `opencode run` subprocesses), a session loop fires a prompt **into the session that created it**, on a fixed interval.
+
+Use `/loop` when the user wants something to happen *while they're working* in the current opencode session — polling a deployment, watching CI, repeatedly checking a long-running script. Use a recurring task or `schedule_task` when the work should happen in the background regardless of whether the user is around.
+
+Slash commands (installed via `bunx opencode-tasks --install-commands` or `--install-skill`):
+
+| Command | What it does |
+|---------|--------------|
+| `/loop 5m check the deploy` | Posts "check the deploy" into the current session every 5 minutes |
+| `/loop check the deploy` | Same, with the default 5-minute interval |
+| `/loop 5m` | Default maintenance prompt at 5-minute intervals |
+| `/loop-list` | Show active loops in this session |
+| `/loop-stop <id>` | Stop a specific loop |
+| `/loop-stop` | Stop every loop in this session |
+
+Interval format is `<N><unit>` where unit is `m` (1–59 minutes), `h` (1–23 hours), or `d` (1–31 days). Sub-minute intervals (`30s`) are rejected because opencode's cron resolution is one minute.
+
+Loops have a 3-day default expiry, survive `opencode --resume`, and are automatically deleted when the session is deleted.
+
+**The user invokes `/loop` themselves.** You don't have a tool for it — it's a CLI feature, not an agent feature. If a user asks you to "loop" something, point them at the `/loop` command.

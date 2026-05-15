@@ -8,10 +8,87 @@ import {
   formatScheduledTaskMessage,
   ScheduleTaskError,
 } from "./lib/schedule.js";
+import type { SessionLoop } from "./lib/types.js";
+import { LoopRuntime, type LoopLogger } from "./lib/loop-runtime.js";
+import {
+  handleLoopCommand,
+  handleLoopStopCommand,
+  handleLoopListCommand,
+  handleLoopEvent,
+} from "./lib/loop-commands.js";
 
 
 function getDb(): TaskDatabase {
   return new TaskDatabase(getDefaultDbPath());
+}
+
+/**
+ * Build the TextPartInput list for a `/loop*` slash command reply.
+ *
+ * We can't suppress the LLM round-trip (opencode has no `noReply`
+ * option for `command.execute.before` as of writing -- see
+ * anomalyco/opencode#9306), and sending an all-`ignored` message
+ * fails provider validation ("messages: at least one message is
+ * required" / "must end with a user message"). So we emit two parts:
+ *
+ *  - An `ignored: true` text with the user-facing confirmation. The
+ *    TUI shows it; the LLM never sees it.
+ *    (Filtered out of the LLM request by `message-v2.ts:802` and
+ *    `prompt.ts:1551`. Shown in the transcript because the TUI's
+ *    transcript formatter only skips `synthetic` parts.)
+ *
+ *  - A `synthetic: true` text containing factual context plus
+ *    instructions for the model to write a short, conversational
+ *    acknowledgement. The LLM sees this and replies; the user does
+ *    NOT see it in the transcript.
+ *    (Shown to the LLM because `message-v2.ts:802` only filters on
+ *    `ignored`. Hidden in the transcript because the TUI's
+ *    transcript formatter explicitly skips `synthetic` parts.)
+ *
+ * This is the best we can do until opencode supports a no-LLM
+ * branch in `command.execute.before`.
+ */
+function commandReplyParts(reply: { visible: string; context: string }): any[] {
+  return [
+    { type: "text", text: reply.visible, ignored: true },
+    {
+      type: "text",
+      text: buildSyntheticInstruction(reply.context),
+      synthetic: true,
+    },
+  ];
+}
+
+/**
+ * Compose the instruction the LLM sees for a `/loop*` slash command.
+ * The model receives a factual summary of what the plugin just did,
+ * plus explicit guidance to reply with one short, conversational
+ * sentence in its own words.
+ */
+function buildSyntheticInstruction(context: string): string {
+  return [
+    `The opencode-tasks plugin just handled a /loop slash command on the user's behalf and has already shown a detailed confirmation to the user in the transcript above.`,
+    ``,
+    `Summary of what happened: the plugin ${context}.`,
+    ``,
+    `Reply with a single short, friendly sentence acknowledging this in your own words. Do not repeat the confirmation details, do not explain what /loop does, do not offer further help. Just a brief, conversational acknowledgement so the user knows you saw it.`,
+  ].join("\n");
+}
+
+/**
+ * Replace the contents of opencode's `output.parts` array in place.
+ *
+ * The caller in `session/prompt.ts:1736` invokes the hook as
+ * `plugin.trigger("command.execute.before", input, { parts })` and
+ * then immediately uses the same `parts` reference to build the
+ * actual prompt -- the return value of `trigger()` is discarded.
+ * That means assigning `output.parts = [...]` does nothing useful:
+ * we have to mutate the existing array so the caller sees our
+ * replacement.
+ */
+function replaceParts(output: { parts: any[] }, parts: any[]): void {
+  output.parts.length = 0;
+  for (const p of parts) output.parts.push(p);
 }
 
 function schedulerWarning(): string {
@@ -22,6 +99,59 @@ function schedulerWarning(): string {
 }
 
 export const ScheduledTasksPlugin: Plugin = async (ctx) => {
+  // ---- Session-loop runtime ----------------------------------------------
+  //
+  // One LoopRuntime per plugin instance (i.e. per opencode process).
+  // Owns its own DB handle so the runtime stays usable for the lifetime
+  // of the opencode process; the per-call tools above continue to open
+  // and close short-lived handles via getDb() so we don't fight over the
+  // single open connection.
+  const loopDb = getDb();
+
+  const loopLogger: LoopLogger = {
+    info: (message) => {
+      try {
+        ctx.client.app.log({
+          body: { service: "opencode-tasks", level: "info", message },
+        });
+      } catch {
+        // Logging failures are non-fatal.
+      }
+    },
+    warn: (message) => {
+      try {
+        ctx.client.app.log({
+          body: { service: "opencode-tasks", level: "warn", message },
+        });
+      } catch {
+        // ignore
+      }
+    },
+    error: (message) => {
+      try {
+        ctx.client.app.log({
+          body: { service: "opencode-tasks", level: "error", message },
+        });
+      } catch {
+        // ignore
+      }
+    },
+  };
+
+  const loopRuntime = new LoopRuntime({
+    db: loopDb,
+    logger: loopLogger,
+    deliver: async (loop: SessionLoop) => {
+      await ctx.client.session.promptAsync({
+        path: { id: loop.sessionId },
+        query: { directory: loop.cwd },
+        body: {
+          parts: [{ type: "text", text: loop.prompt }],
+        },
+      });
+    },
+  });
+
   return {
     tool: {
       schedule_task: tool({
@@ -376,14 +506,87 @@ Common examples:
   \`bunx opencode-tasks --install\`
 - Tasks use your system's local timezone
 - Tasks with \`session_name\` set will reuse the same session across runs
-- Use \`enabled: false\` to temporarily disable a task without deleting it${schedulerWarning()}`;
+- Use \`enabled: false\` to temporarily disable a task without deleting it
+
+### When to use recurring tasks vs. one-off tasks vs. /loop
+
+- **Recurring task** (markdown file): runs in a *fresh* opencode subprocess on a cron schedule. Good for background work that should run whether or not the user is in opencode.
+- **One-off task** (\`schedule_task\` tool): runs once in a fresh subprocess. Good for "remind me at 3pm" or "run this once tomorrow."
+- **\`/loop\`** (slash command, not a tool): posts a recurring prompt into the *current user session*. Good for in-session polling — checking CI, deploys, file watchers. Only fires while the session is open. The user invokes this themselves; you do not have a tool for it.${schedulerWarning()}`;
         },
       }),
     },
 
+    "command.execute.before": async (input, output) => {
+      const command = input.command;
+      if (command !== "loop" && command !== "loop-stop" && command !== "loop-list") {
+        return;
+      }
+
+      const sessionId = input.sessionID;
+      if (!sessionId) {
+        replaceParts(
+          output,
+          commandReplyParts({
+            visible:
+              "Error: no session id available for /loop. This command must be run inside an opencode session.",
+            context:
+              "tried to handle the slash command but the plugin couldn't see a session id",
+          })
+        );
+        return;
+      }
+
+      // Make sure any pre-existing loops for this session are armed
+      // before we do anything else (handles --resume cleanly).
+      try {
+        loopRuntime.ensureSessionArmed(sessionId);
+      } catch {
+        // Non-fatal.
+      }
+
+      try {
+        let reply: { visible: string; context: string } | undefined;
+        if (command === "loop") {
+          reply = handleLoopCommand(
+            input.arguments ?? "",
+            sessionId,
+            ctx.directory,
+            loopDb,
+            loopRuntime
+          );
+        } else if (command === "loop-stop") {
+          reply = handleLoopStopCommand(
+            input.arguments ?? "",
+            sessionId,
+            loopDb,
+            loopRuntime
+          );
+        } else if (command === "loop-list") {
+          reply = handleLoopListCommand(sessionId, loopDb);
+        }
+        if (reply !== undefined) {
+          replaceParts(output, commandReplyParts(reply));
+        }
+      } catch (err: any) {
+        const message = err?.message ?? String(err);
+        replaceParts(
+          output,
+          commandReplyParts({
+            visible: `Error: ${message}`,
+            context: `crashed while handling the slash command: ${message}`,
+          })
+        );
+      }
+    },
+
     event: async ({ event }: { event: any }) => {
+      // Loop bookkeeping: re-arm on first sight of a session, clean up
+      // when a session is deleted.
+      handleLoopEvent(event, loopDb, loopRuntime, loopLogger);
+
+      // Opportunistic overdue-task check on session creation.
       if (event.type === "session.created") {
-        // Opportunistically check for overdue tasks
         try {
           const db = getDb();
           try {

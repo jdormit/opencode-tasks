@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { TaskDatabase, getDefaultDbPath } from "./lib/db.js";
 import { readAllTasks } from "./lib/tasks.js";
@@ -433,26 +433,38 @@ function log(message: string, level: "info" | "error" = "info"): void {
 }
 
 /**
+ * Find a packaged resource (skill files, command files) by walking
+ * candidate paths from both the bundled (dist/cli.js) and source
+ * (src/cli.ts) layouts.
+ */
+function resolvePackageResource(relPath: string): string | undefined {
+  const cliPath = fileURLToPath(import.meta.url);
+  const candidates = [
+    // bundled: dist/cli.js -> ../<relPath>
+    join(dirname(dirname(cliPath)), relPath),
+    // source: src/cli.ts -> ../<relPath>
+    join(dirname(cliPath), "..", relPath),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return undefined;
+}
+
+/**
  * Install the scheduled-tasks skill to ~/.config/opencode/skills/
+ * and the /loop slash command markdown files to ~/.config/opencode/command/.
  */
 function installSkill(): void {
-  const cliPath = fileURLToPath(import.meta.url);
-  const packageRoot = dirname(dirname(cliPath)); // dist/cli.js -> package root
-  const skillSrc = join(packageRoot, "skill", "SKILL.md");
-
-  if (!existsSync(skillSrc)) {
-    // When running from source (src/cli.ts), try repo root
-    const altSrc = join(dirname(dirname(cliPath)), "skill", "SKILL.md");
-    if (!existsSync(altSrc)) {
-      console.error("Could not find SKILL.md in the package.");
-      console.error("Looked at:", skillSrc, "and", altSrc);
-      process.exit(1);
-    }
-    doInstallSkill(altSrc);
-    return;
+  const skillSrc = resolvePackageResource(join("skill", "SKILL.md"));
+  if (!skillSrc) {
+    console.error("Could not find skill/SKILL.md in the package.");
+    process.exit(1);
   }
-
   doInstallSkill(skillSrc);
+
+  console.log("");
+  installCommands();
 }
 
 function doInstallSkill(srcPath: string): void {
@@ -469,6 +481,74 @@ function doInstallSkill(srcPath: string): void {
   console.log("");
   console.log("The 'scheduled-tasks' skill is now available to OpenCode agents.");
   console.log("Agents will automatically discover it and can load it when relevant.");
+}
+
+/**
+ * Install the /loop, /loop-stop, /loop-list slash commands into
+ * ~/.config/opencode/commands/.
+ *
+ * Earlier versions of this package wrote to the singular
+ * ~/.config/opencode/command/ directory (a mistake -- opencode looks
+ * for `commands/`). If we find leftover files there from a previous
+ * install, remove them so they don't shadow the correct ones.
+ */
+const COMMAND_FILES = ["loop.md", "loop-stop.md", "loop-list.md"];
+
+function installCommands(): void {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  const destDir = join(home, ".config", "opencode", "commands");
+  mkdirSync(destDir, { recursive: true });
+
+  const installed: string[] = [];
+  const missing: string[] = [];
+
+  for (const file of COMMAND_FILES) {
+    const src = resolvePackageResource(join("commands", file));
+    if (!src) {
+      missing.push(file);
+      continue;
+    }
+    const dest = join(destDir, file);
+    copyFileSync(src, dest);
+    installed.push(dest);
+  }
+
+  // Clean up stale files from the singular `command/` directory written
+  // by 0.5.0. Only delete files we previously wrote -- never touch
+  // unrelated user files.
+  const legacyDir = join(home, ".config", "opencode", "command");
+  const cleaned: string[] = [];
+  for (const file of COMMAND_FILES) {
+    const legacyPath = join(legacyDir, file);
+    if (existsSync(legacyPath)) {
+      try {
+        unlinkSync(legacyPath);
+        cleaned.push(legacyPath);
+      } catch {
+        // Non-fatal: warn but keep going.
+      }
+    }
+  }
+
+  if (installed.length > 0) {
+    console.log("Slash commands installed:");
+    for (const p of installed) console.log(`  ${p}`);
+    console.log("");
+    console.log(
+      "Available in any opencode session: /loop, /loop-stop, /loop-list"
+    );
+  }
+  if (cleaned.length > 0) {
+    console.log("");
+    console.log("Removed stale files from a previous install:");
+    for (const p of cleaned) console.log(`  ${p}`);
+  }
+  if (missing.length > 0) {
+    console.error("");
+    console.error("Could not find these command files in the package:");
+    for (const f of missing) console.error(`  commands/${f}`);
+    console.error("(Slash commands will not be available until this is fixed.)");
+  }
 }
 
 // --- --schedule-task command ---
@@ -688,6 +768,8 @@ Usage:
   opencode-tasks --install          Install the system scheduler (launchd/systemd)
   opencode-tasks --uninstall        Remove the system scheduler
   opencode-tasks --install-skill    Install the scheduled-tasks agent skill
+                                    (also installs the /loop slash commands)
+  opencode-tasks --install-commands Install just the /loop slash commands
   opencode-tasks --status [--limit N]
                                     Show scheduler status and the most recent
                                     one-off tasks (default: ${DEFAULT_STATUS_LIMIT})
@@ -747,6 +829,9 @@ async function main(): Promise<void> {
       break;
     case "--install-skill":
       installSkill();
+      break;
+    case "--install-commands":
+      installCommands();
       break;
     case "--status": {
       let limit: number;

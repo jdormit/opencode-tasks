@@ -116,6 +116,35 @@ export interface SessionMapping {
 }
 
 /**
+ * A "session loop" — a recurring prompt that posts a message into a
+ * specific opencode session on a schedule. Unlike recurring or one-off
+ * tasks (which run `opencode run` in a fresh subprocess), loops are
+ * driven by in-process timers in the plugin and use
+ * `client.session.promptAsync` to inject the prompt into the existing
+ * session that created the loop.
+ *
+ * State lives in SQLite so loops survive plugin reloads (e.g.
+ * `opencode --resume`). Timers themselves are ephemeral and rebuilt
+ * lazily from the DB the first time we see an event for a session.
+ */
+export interface SessionLoop {
+  id: string;
+  sessionId: string;
+  prompt: string;
+  /** 5-field cron expression */
+  schedule: string;
+  /** Human-readable interval label, e.g. "5m", "2h" — for display only */
+  intervalLabel?: string;
+  /** Working directory captured at loop creation time */
+  cwd: string;
+  enabled: boolean;
+  createdAt: string;
+  lastRunAt?: string;
+  /** ISO timestamp after which the loop should stop firing (optional) */
+  expiresAt?: string;
+}
+
+/**
  * Unified task config passed to the runner (works for both recurring and one-off)
  */
 export interface TaskExecConfig {

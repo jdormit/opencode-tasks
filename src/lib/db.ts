@@ -6,12 +6,13 @@ import type {
   OneoffTask,
   OneoffTaskStatus,
   PermissionConfig,
+  SessionLoop,
   SessionMapping,
   TaskRun,
   TaskRunStatus,
 } from "./types.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -58,6 +59,23 @@ CREATE TABLE IF NOT EXISTS session_map (
 const MIGRATION_V2 = `
 ALTER TABLE task_runs ADD COLUMN pid INTEGER;
 ALTER TABLE oneoff_tasks ADD COLUMN pid INTEGER;
+`;
+
+const MIGRATION_V3 = `
+CREATE TABLE IF NOT EXISTS session_loops (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  interval_label TEXT,
+  cwd TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_run_at TEXT,
+  expires_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_session_loops_session ON session_loops(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_loops_enabled ON session_loops(enabled);
 `;
 
 export class TaskDatabase {
@@ -113,6 +131,15 @@ export class TaskDatabase {
           "INSERT OR REPLACE INTO schema_version (version) VALUES (?)"
         )
         .run(2);
+    }
+    if (fromVersion < 3) {
+      // V3: Add session_loops table for in-session recurring prompts.
+      this.db.exec(MIGRATION_V3);
+      this.db
+        .prepare(
+          "INSERT OR REPLACE INTO schema_version (version) VALUES (?)"
+        )
+        .run(3);
     }
   }
 
@@ -415,6 +442,97 @@ export class TaskDatabase {
       .run(sessionName, sessionId, taskName ?? null);
   }
 
+  // --- Session loops ---
+
+  createSessionLoop(loop: {
+    sessionId: string;
+    prompt: string;
+    schedule: string;
+    intervalLabel?: string;
+    cwd: string;
+    expiresAt?: string;
+  }): SessionLoop {
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO session_loops (id, session_id, prompt, schedule, interval_label, cwd, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        loop.sessionId,
+        loop.prompt,
+        loop.schedule,
+        loop.intervalLabel ?? null,
+        loop.cwd,
+        loop.expiresAt ?? null
+      );
+    return this.getSessionLoop(id)!;
+  }
+
+  getSessionLoop(id: string): SessionLoop | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM session_loops WHERE id = ?")
+      .get(id) as any;
+    return row ? this.mapSessionLoopRow(row) : undefined;
+  }
+
+  listLoopsForSession(sessionId: string): SessionLoop[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM session_loops WHERE session_id = ? ORDER BY created_at ASC"
+      )
+      .all(sessionId)
+      .map((r: any) => this.mapSessionLoopRow(r));
+  }
+
+  listEnabledLoopsForSession(sessionId: string): SessionLoop[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM session_loops WHERE session_id = ? AND enabled = 1 ORDER BY created_at ASC"
+      )
+      .all(sessionId)
+      .map((r: any) => this.mapSessionLoopRow(r));
+  }
+
+  setLoopLastRun(id: string, lastRunAt: string): void {
+    this.db
+      .prepare("UPDATE session_loops SET last_run_at = ? WHERE id = ?")
+      .run(lastRunAt, id);
+  }
+
+  disableSessionLoop(id: string): boolean {
+    const result = this.db
+      .prepare(
+        "UPDATE session_loops SET enabled = 0 WHERE id = ? AND enabled = 1"
+      )
+      .run(id);
+    return result.changes > 0;
+  }
+
+  disableLoopsForSession(sessionId: string): number {
+    const result = this.db
+      .prepare(
+        "UPDATE session_loops SET enabled = 0 WHERE session_id = ? AND enabled = 1"
+      )
+      .run(sessionId);
+    return result.changes;
+  }
+
+  deleteLoopsForSession(sessionId: string): number {
+    const result = this.db
+      .prepare("DELETE FROM session_loops WHERE session_id = ?")
+      .run(sessionId);
+    return result.changes;
+  }
+
+  deleteSessionLoop(id: string): boolean {
+    const result = this.db
+      .prepare("DELETE FROM session_loops WHERE id = ?")
+      .run(id);
+    return result.changes > 0;
+  }
+
   // --- Row mappers ---
 
   private mapOneoffRow(row: any): OneoffTask {
@@ -457,6 +575,21 @@ export class TaskDatabase {
       sessionId: row.session_id,
       taskName: row.task_name ?? undefined,
       updatedAt: row.updated_at,
+    };
+  }
+
+  private mapSessionLoopRow(row: any): SessionLoop {
+    return {
+      id: row.id,
+      sessionId: row.session_id,
+      prompt: row.prompt,
+      schedule: row.schedule,
+      intervalLabel: row.interval_label ?? undefined,
+      cwd: row.cwd,
+      enabled: row.enabled === 1,
+      createdAt: row.created_at,
+      lastRunAt: row.last_run_at ?? undefined,
+      expiresAt: row.expires_at ?? undefined,
     };
   }
 
