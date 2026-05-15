@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { parseScheduleTaskArgs } from "../cli.js";
+import { parseScheduleTaskArgs, parseLimitArg } from "../cli.js";
 
 describe("parseScheduleTaskArgs", () => {
   it("parses --flag value form", () => {
@@ -70,6 +70,46 @@ describe("parseScheduleTaskArgs", () => {
   it("throws when a value flag is missing its value", () => {
     expect(() => parseScheduleTaskArgs(["--prompt"])).toThrow(
       /requires a value/
+    );
+  });
+});
+
+describe("parseLimitArg", () => {
+  it("returns the default when no flag is present", () => {
+    expect(parseLimitArg([], 5)).toBe(5);
+    expect(parseLimitArg(["--something", "else"], 5)).toBe(5);
+  });
+
+  it("parses --limit value form", () => {
+    expect(parseLimitArg(["--limit", "10"], 3)).toBe(10);
+  });
+
+  it("parses --limit=value form", () => {
+    expect(parseLimitArg(["--limit=42"], 3)).toBe(42);
+  });
+
+  it("parses -n shorthand", () => {
+    expect(parseLimitArg(["-n", "7"], 3)).toBe(7);
+  });
+
+  it("throws on missing value", () => {
+    expect(() => parseLimitArg(["--limit"], 3)).toThrow(/requires a value/);
+  });
+
+  it("throws on non-integer value", () => {
+    expect(() => parseLimitArg(["--limit", "abc"], 3)).toThrow(
+      /Invalid value/
+    );
+  });
+
+  it("throws on zero or negative", () => {
+    expect(() => parseLimitArg(["--limit", "0"], 3)).toThrow(/Invalid value/);
+    expect(() => parseLimitArg(["--limit", "-5"], 3)).toThrow(/Invalid value/);
+  });
+
+  it("throws on non-integer floats", () => {
+    expect(() => parseLimitArg(["--limit", "1.5"], 3)).toThrow(
+      /Invalid value/
     );
   });
 });

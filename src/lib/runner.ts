@@ -4,6 +4,24 @@ import type { TaskExecConfig } from "./types.js";
 import { expandPath } from "./tasks.js";
 
 /**
+ * Extract a session ID from a single parsed JSON event, if present.
+ * Returns undefined if the event doesn't contain a session ID in any
+ * of the known shapes.
+ */
+function sessionIdFromEvent(event: any): string | undefined {
+  if (event?.properties?.info?.id?.startsWith?.("ses_")) {
+    return event.properties.info.id;
+  }
+  if (event?.sessionID?.startsWith?.("ses_")) {
+    return event.sessionID;
+  }
+  if (event?.properties?.sessionID?.startsWith?.("ses_")) {
+    return event.properties.sessionID;
+  }
+  return undefined;
+}
+
+/**
  * Parse a session ID from opencode's JSON-formatted output.
  *
  * When `opencode run --format json` is used, events are emitted as
@@ -16,16 +34,8 @@ export function parseSessionIdFromJsonOutput(
   for (const line of output.split("\n")) {
     if (!line.trim()) continue;
     try {
-      const event = JSON.parse(line);
-      if (event.properties?.info?.id?.startsWith("ses_")) {
-        return event.properties.info.id;
-      }
-      if (event.sessionID?.startsWith("ses_")) {
-        return event.sessionID;
-      }
-      if (event.properties?.sessionID?.startsWith("ses_")) {
-        return event.properties.sessionID;
-      }
+      const sid = sessionIdFromEvent(JSON.parse(line));
+      if (sid) return sid;
     } catch {
       // Not JSON, skip
     }
@@ -116,8 +126,12 @@ export function spawnWorker(
  * Execute a task synchronously and update the DB with the result.
  *
  * This is called by the --exec-task worker subprocess. It runs
- * `opencode run` to completion, parses the output, and writes
- * the result back to the DB.
+ * `opencode run` to completion, streams the output line-by-line, and:
+ *
+ * 1. As soon as the session ID is observed in the JSON event stream,
+ *    writes it to the DB so external tooling can find the running session.
+ * 2. When the run finishes, writes the final status (completed/failed)
+ *    and any captured error.
  */
 export async function execTaskAndUpdateDb(
   task: TaskExecConfig,
@@ -127,10 +141,28 @@ export async function execTaskAndUpdateDb(
 ): Promise<void> {
   const { args, env, cwd } = buildTaskCommand(task, db);
 
+  let sessionId: string | undefined;
+
+  const onSessionId = (sid: string): void => {
+    if (sessionId) return;
+    sessionId = sid;
+    try {
+      if (isOneoff) {
+        db.setOneoffTaskSessionId(runId, sid);
+      } else {
+        db.setTaskRunSessionId(runId, sid);
+      }
+      if (task.sessionName) {
+        db.upsertSessionMapping(task.sessionName, sid, task.name);
+      }
+    } catch {
+      // Don't let DB errors here kill the run; we'll try again at completion.
+    }
+  };
+
   // Use spawn instead of execFile -- opencode run can hang with
   // execFile due to TTY detection / buffer issues
-  const { stdout, stderr, exitCode } = await new Promise<{
-    stdout: string;
+  const { stderr, exitCode } = await new Promise<{
     stderr: string;
     exitCode: number;
   }>((resolve) => {
@@ -140,11 +172,25 @@ export async function execTaskAndUpdateDb(
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
+    let stdoutBuffer = "";
     let stderr = "";
 
     child.stdout.on("data", (data: Buffer) => {
-      stdout += data.toString();
+      stdoutBuffer += data.toString();
+      // Process complete lines; keep any trailing partial line in the buffer.
+      let newlineIdx: number;
+      while ((newlineIdx = stdoutBuffer.indexOf("\n")) !== -1) {
+        const line = stdoutBuffer.slice(0, newlineIdx);
+        stdoutBuffer = stdoutBuffer.slice(newlineIdx + 1);
+        if (!line.trim()) continue;
+        if (sessionId) continue; // already found, skip parse work
+        try {
+          const sid = sessionIdFromParsedLine(line);
+          if (sid) onSessionId(sid);
+        } catch {
+          // Not JSON, skip
+        }
+      }
     });
 
     child.stderr.on("data", (data: Buffer) => {
@@ -152,24 +198,26 @@ export async function execTaskAndUpdateDb(
     });
 
     child.on("close", (code) => {
-      resolve({ stdout, stderr, exitCode: code ?? 1 });
+      // Flush any final line that wasn't terminated by a newline.
+      if (!sessionId && stdoutBuffer.trim()) {
+        try {
+          const sid = sessionIdFromParsedLine(stdoutBuffer);
+          if (sid) onSessionId(sid);
+        } catch {
+          // ignore
+        }
+      }
+      resolve({ stderr, exitCode: code ?? 1 });
     });
 
     child.on("error", (err) => {
-      resolve({ stdout, stderr: err.message, exitCode: 1 });
+      resolve({ stderr: err.message, exitCode: 1 });
     });
   });
 
   const success = exitCode === 0;
 
-  const sessionId = parseSessionIdFromJsonOutput(stdout);
-
-  // Update session map if needed
-  if (task.sessionName && sessionId) {
-    db.upsertSessionMapping(task.sessionName, sessionId, task.name);
-  }
-
-  // Update DB record
+  // Final DB update with status and any error.
   if (isOneoff) {
     db.updateOneoffTaskStatus(runId, success ? "completed" : "failed", {
       sessionId,
@@ -181,4 +229,12 @@ export async function execTaskAndUpdateDb(
       error: success ? undefined : stderr.slice(0, 4096),
     });
   }
+}
+
+/**
+ * Try to parse a single line of opencode JSON output and return the
+ * session ID if present. Throws if the line isn't valid JSON.
+ */
+function sessionIdFromParsedLine(line: string): string | undefined {
+  return sessionIdFromEvent(JSON.parse(line));
 }

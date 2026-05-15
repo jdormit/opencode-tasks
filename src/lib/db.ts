@@ -185,6 +185,52 @@ export class TaskDatabase {
       .map((r: any) => this.mapOneoffRow(r));
   }
 
+  /**
+   * Get the most recent one-off tasks across all statuses.
+   *
+   * Ordering: pending tasks ordered by scheduled time (soonest first),
+   * then non-pending tasks ordered by most recent activity. This puts
+   * upcoming work at the top, then recent history. Useful for status
+   * displays where the user wants to see "what's happening right now".
+   */
+  getRecentOneoffTasks(limit: number): OneoffTask[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM oneoff_tasks
+         ORDER BY
+           CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+           CASE WHEN status = 'pending' THEN scheduled_at END ASC,
+           COALESCE(executed_at, scheduled_at) DESC
+         LIMIT ?`
+      )
+      .all(limit)
+      .map((r: any) => this.mapOneoffRow(r));
+  }
+
+  /**
+   * Update only the session_id for a one-off task without changing status.
+   * Called by the worker when it parses the session ID from streamed
+   * opencode output, before the run completes.
+   */
+  setOneoffTaskSessionId(id: string, sessionId: string): void {
+    this.db
+      .prepare(
+        "UPDATE oneoff_tasks SET session_id = ? WHERE id = ? AND session_id IS NULL"
+      )
+      .run(sessionId, id);
+  }
+
+  /**
+   * Update only the session_id for a recurring task run without changing status.
+   */
+  setTaskRunSessionId(id: string, sessionId: string): void {
+    this.db
+      .prepare(
+        "UPDATE task_runs SET session_id = ? WHERE id = ? AND session_id IS NULL"
+      )
+      .run(sessionId, id);
+  }
+
   updateOneoffTaskStatus(
     id: string,
     status: OneoffTaskStatus,

@@ -137,6 +137,75 @@ describe("TaskDatabase", () => {
       // Can't cancel again
       expect(db.cancelOneoffTask(task.id)).toBe(false);
     });
+
+    it("setOneoffTaskSessionId only sets when null", () => {
+      const task = db.createOneoffTask({
+        description: "Test",
+        prompt: "p",
+        cwd: "/tmp",
+        scheduledAt: "2026-12-31T00:00:00.000Z",
+      });
+
+      db.setOneoffTaskSessionId(task.id, "ses_first");
+      expect(db.getOneoffTask(task.id)!.sessionId).toBe("ses_first");
+
+      // Subsequent calls should not overwrite an existing session id.
+      db.setOneoffTaskSessionId(task.id, "ses_second");
+      expect(db.getOneoffTask(task.id)!.sessionId).toBe("ses_first");
+    });
+
+    it("getRecentOneoffTasks returns pending first, then most recent", () => {
+      // Create three tasks with deterministic state.
+      const oldCompleted = db.createOneoffTask({
+        description: "old completed",
+        prompt: "p",
+        cwd: "/tmp",
+        scheduledAt: "2020-01-01T00:00:00.000Z",
+      });
+      db.updateOneoffTaskStatus(oldCompleted.id, "completed");
+      // Backdate executed_at so this is clearly the oldest.
+      (db as any).db
+        .prepare("UPDATE oneoff_tasks SET executed_at = ? WHERE id = ?")
+        .run("2020-01-02T00:00:00.000Z", oldCompleted.id);
+
+      const recentFailed = db.createOneoffTask({
+        description: "recent failed",
+        prompt: "p",
+        cwd: "/tmp",
+        scheduledAt: "2024-01-01T00:00:00.000Z",
+      });
+      db.updateOneoffTaskStatus(recentFailed.id, "failed", {
+        error: "boom",
+      });
+
+      const upcomingPending = db.createOneoffTask({
+        description: "upcoming pending",
+        prompt: "p",
+        cwd: "/tmp",
+        scheduledAt: "2099-01-01T00:00:00.000Z",
+      });
+
+      const recent = db.getRecentOneoffTasks(10);
+      expect(recent).toHaveLength(3);
+      // Pending first
+      expect(recent[0].id).toBe(upcomingPending.id);
+      // Then non-pending in reverse chronological order
+      expect(recent[1].id).toBe(recentFailed.id);
+      expect(recent[2].id).toBe(oldCompleted.id);
+    });
+
+    it("getRecentOneoffTasks honors the limit", () => {
+      for (let i = 0; i < 5; i++) {
+        db.createOneoffTask({
+          description: `task ${i}`,
+          prompt: "p",
+          cwd: "/tmp",
+          scheduledAt: `2099-0${i + 1}-01T00:00:00.000Z`,
+        });
+      }
+      expect(db.getRecentOneoffTasks(2)).toHaveLength(2);
+      expect(db.getRecentOneoffTasks(10)).toHaveLength(5);
+    });
   });
 
   describe("task runs", () => {
@@ -194,6 +263,16 @@ describe("TaskDatabase", () => {
       const lastSuccess = db.getLastSuccessfulTaskRun("task1");
       expect(lastSuccess).toBeDefined();
       expect(lastSuccess!.id).toBe(run1.id);
+    });
+
+    it("setTaskRunSessionId only sets when null", () => {
+      const run = db.createTaskRun("task1");
+
+      db.setTaskRunSessionId(run.id, "ses_first");
+      expect(db.getLastTaskRun("task1")!.sessionId).toBe("ses_first");
+
+      db.setTaskRunSessionId(run.id, "ses_second");
+      expect(db.getLastTaskRun("task1")!.sessionId).toBe("ses_first");
     });
   });
 

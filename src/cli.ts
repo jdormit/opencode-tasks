@@ -202,7 +202,50 @@ async function execTask(runId: string, isOneoff: boolean): Promise<void> {
 
 // --- CLI display commands ---
 
-function listTasks(): void {
+const DEFAULT_LIST_LIMIT = 20;
+const DEFAULT_STATUS_LIMIT = 3;
+
+/**
+ * Format a single one-off task as a multi-line block for display.
+ * Used by both --list and --status so output stays consistent.
+ */
+function formatOneoffTask(task: import("./lib/types.js").OneoffTask): string {
+  const idShort = task.id.length > 12 ? `${task.id.slice(0, 12)}...` : task.id;
+  const lines: string[] = [];
+  lines.push(`  ${idShort}  [${task.status}]  "${task.description}"`);
+
+  if (task.status === "pending") {
+    lines.push(`    scheduled: ${localTime(task.scheduledAt)}`);
+  } else if (task.status === "running") {
+    if (task.executedAt) {
+      lines.push(`    started: ${localTime(task.executedAt)}`);
+    }
+    if (task.pid) {
+      lines.push(`    pid: ${task.pid}`);
+    }
+  } else {
+    // completed / failed / cancelled
+    if (task.executedAt) {
+      lines.push(`    executed: ${localTime(task.executedAt)}`);
+    } else {
+      lines.push(`    scheduled: ${localTime(task.scheduledAt)}`);
+    }
+  }
+
+  if (task.sessionId) {
+    lines.push(`    session: ${task.sessionId}`);
+  }
+  if (task.error) {
+    const truncated =
+      task.error.length > 200 ? `${task.error.slice(0, 200)}...` : task.error;
+    // Indent multi-line errors so the report stays readable.
+    const indented = truncated.split("\n").join("\n      ");
+    lines.push(`    error: ${indented}`);
+  }
+  return lines.join("\n");
+}
+
+function listTasks(limit: number): void {
   const db = new TaskDatabase(getDefaultDbPath());
 
   try {
@@ -242,15 +285,13 @@ function listTasks(): void {
       console.log("No recurring tasks found.");
     }
 
-    const oneoffs = db.listOneoffTasks({ status: "pending" });
+    const oneoffs = db.getRecentOneoffTasks(limit);
     if (oneoffs.length > 0) {
       console.log("");
-      console.log("Pending one-off tasks:");
+      console.log(`Recent one-off tasks (last ${oneoffs.length}):`);
       console.log("");
       for (const task of oneoffs) {
-        console.log(
-          `  ${task.id.slice(0, 12)}...  "${task.description}"  scheduled: ${localTime(task.scheduledAt)}`
-        );
+        console.log(formatOneoffTask(task));
       }
     }
   } finally {
@@ -258,7 +299,7 @@ function listTasks(): void {
   }
 }
 
-function showStatus(): void {
+function showStatus(limit: number): void {
   const info = getInstallInfo();
   const platform = info.platform === "unsupported" ? "unknown" : info.platform;
 
@@ -319,14 +360,12 @@ function showStatus(): void {
       }
     }
 
-    const pendingOneoffs = db.listOneoffTasks({ status: "pending" });
-    if (pendingOneoffs.length > 0) {
+    const oneoffs = db.getRecentOneoffTasks(limit);
+    if (oneoffs.length > 0) {
       console.log("");
-      console.log(`One-off tasks: ${pendingOneoffs.length} pending`);
-      for (const task of pendingOneoffs) {
-        console.log(
-          `  ${task.id.slice(0, 12)}...  "${task.description}"  scheduled: ${localTime(task.scheduledAt)}`
-        );
+      console.log(`Recent one-off tasks (last ${oneoffs.length}):`);
+      for (const task of oneoffs) {
+        console.log(formatOneoffTask(task));
       }
     }
 
@@ -335,6 +374,37 @@ function showStatus(): void {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Parse a `--limit <n>` flag from a list of args. Returns the parsed
+ * value (a positive integer) or the supplied default. Throws on
+ * malformed input.
+ */
+export function parseLimitArg(args: string[], defaultLimit: number): number {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    let value: string | undefined;
+    if (arg === "--limit" || arg === "-n") {
+      value = args[i + 1];
+      if (value === undefined) {
+        throw new Error(`Flag ${arg} requires a value`);
+      }
+    } else if (arg.startsWith("--limit=")) {
+      value = arg.slice("--limit=".length);
+    } else {
+      continue;
+    }
+
+    const n = Number(value);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new Error(
+        `Invalid value for --limit: "${value}" (must be a positive integer)`
+      );
+    }
+    return n;
+  }
+  return defaultLimit;
 }
 
 /**
@@ -618,8 +688,12 @@ Usage:
   opencode-tasks --install          Install the system scheduler (launchd/systemd)
   opencode-tasks --uninstall        Remove the system scheduler
   opencode-tasks --install-skill    Install the scheduled-tasks agent skill
-  opencode-tasks --status           Show scheduler and task status
-  opencode-tasks --list             List all tasks with next run times
+  opencode-tasks --status [--limit N]
+                                    Show scheduler status and the most recent
+                                    one-off tasks (default: ${DEFAULT_STATUS_LIMIT})
+  opencode-tasks --list [--limit N]
+                                    List recurring tasks plus the most recent
+                                    one-off tasks (default: ${DEFAULT_LIST_LIMIT})
   opencode-tasks --schedule-task    Schedule a one-off task
                                     (use --schedule-task --help for options)
   opencode-tasks --help             Show this help message
@@ -674,12 +748,28 @@ async function main(): Promise<void> {
     case "--install-skill":
       installSkill();
       break;
-    case "--status":
-      showStatus();
+    case "--status": {
+      let limit: number;
+      try {
+        limit = parseLimitArg(args.slice(1), DEFAULT_STATUS_LIMIT);
+      } catch (err: any) {
+        console.error(`Error: ${err.message}`);
+        process.exit(1);
+      }
+      showStatus(limit);
       break;
-    case "--list":
-      listTasks();
+    }
+    case "--list": {
+      let limit: number;
+      try {
+        limit = parseLimitArg(args.slice(1), DEFAULT_LIST_LIMIT);
+      } catch (err: any) {
+        console.error(`Error: ${err.message}`);
+        process.exit(1);
+      }
+      listTasks(limit);
       break;
+    }
     case "--schedule-task":
       await scheduleTaskCommand(args.slice(1));
       break;
