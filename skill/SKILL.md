@@ -135,6 +135,8 @@ Install: `bunx opencode-tasks --install`
 Uninstall: `bunx opencode-tasks --uninstall`
 Check status: `bunx opencode-tasks --status`
 
+`--install` stages a self-contained copy of the daemon into `~/.local/share/opencode-tasks/` and points the launchd plist / systemd unit at it, so the running daemon does not depend on a `bunx` temp cache, a `bun link`'d checkout, or any particular install method. Re-run `--install` after upgrading the package.
+
 If the daemon is not installed, warn the user and suggest they install it.
 
 ## Session Behavior

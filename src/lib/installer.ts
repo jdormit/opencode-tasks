@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -76,6 +78,141 @@ function resolveSchedulerPath(): string {
   );
 }
 
+/**
+ * Resolve the package root (the directory containing dist/, node_modules/,
+ * skill/, commands/, examples/) from the resolved scheduler script path.
+ *
+ * The scheduler lives at <root>/dist/cli.js, so the root is two levels up.
+ */
+function resolvePackageRoot(): string {
+  return dirname(dirname(resolveSchedulerPath()));
+}
+
+/**
+ * Resolve a stable, absolute path to the bun binary to bake into the
+ * launchd plist / systemd unit.
+ *
+ * launchd and systemd invoke the binary with a minimal environment and no
+ * PATH resolution, so we must hand them an absolute path. `process.execPath`
+ * is the bun that ran the installer, but if that points at a *version-pinned*
+ * mise install (e.g. .../mise/installs/bun/1.3.11/bin/bun) the path breaks the
+ * next time bun is upgraded and the old version is pruned.
+ *
+ * Strategy:
+ *   - If execPath is a mise install or mise shim, prefer the stable mise
+ *     shim (<miseRoot>/shims/bun), which re-resolves to the active bun
+ *     across upgrades. Honor $MISE_DATA_DIR when deriving the root.
+ *   - Otherwise (Homebrew /opt/homebrew/bin/bun, official installer
+ *     ~/.bun/bin/bun, etc.) the path is already stable -- use it unchanged.
+ *   - If the preferred shim doesn't exist, fall back to execPath.
+ */
+export function resolveBunPath(
+  execPath: string,
+  env: Record<string, string | undefined> = process.env,
+  existsFn: (p: string) => boolean = existsSync
+): string {
+  // Already a mise shim -- keep it (it's the stable path we'd pick anyway).
+  if (/[/\\]mise[/\\]shims[/\\]bun$/.test(execPath)) {
+    return execPath;
+  }
+
+  // mise version-pinned install: .../mise/installs/<tool>/<version>/bin/<bin>
+  const installMatch = execPath.match(
+    /^(.*[/\\]mise)[/\\]installs[/\\][^/\\]+[/\\][^/\\]+[/\\]bin[/\\][^/\\]+$/
+  );
+  if (installMatch) {
+    const miseRoot = env.MISE_DATA_DIR ?? installMatch[1];
+    const shim = join(miseRoot, "shims", "bun");
+    if (existsFn(shim)) {
+      return shim;
+    }
+    // Shim missing for some reason -- the pinned path is better than nothing.
+    return execPath;
+  }
+
+  // Homebrew, ~/.bun, system installs: already stable, use as-is.
+  return execPath;
+}
+
+/**
+ * Resolve a stable bun path and verify it actually launches (`bun --version`)
+ * before it gets baked into a long-lived service definition. Falls back to
+ * the raw execPath if the preferred path can't be executed.
+ */
+function resolveAndValidateBunPath(): string {
+  const preferred = resolveBunPath(process.execPath);
+  if (preferred === process.execPath) return preferred;
+  try {
+    execFileSync(preferred, ["--version"], { stdio: "ignore" });
+    return preferred;
+  } catch {
+    // Preferred path doesn't launch under a clean env -- use the binary we
+    // know works (the one currently running the installer).
+    return process.execPath;
+  }
+}
+
+/**
+ * Remove volatile bunx temp-cache entries (under <tmp>/bunx-*) from a PATH
+ * string. Those directories are periodically purged by the OS, so baking
+ * them into a long-lived service environment is a foot-gun.
+ */
+export function sanitizePath(pathStr: string): string {
+  return pathStr
+    .split(":")
+    .filter((entry) => entry.length > 0)
+    .filter((entry) => !/[/\\]bunx-[^/\\]*/.test(entry))
+    .join(":");
+}
+
+/**
+ * Stable, install-method-independent directory the daemon is staged into.
+ * Mirrors getLogDir()'s use of ~/.local/share. Once staged here the daemon
+ * survives bunx temp purges, `bun unlink`, and moving the source checkout.
+ */
+export function getDaemonDir(
+  env: Record<string, string | undefined> = process.env
+): string {
+  const home = env.HOME ?? env.USERPROFILE ?? "";
+  return join(home, ".local", "share", "opencode-tasks");
+}
+
+const STAGED_RESOURCE_DIRS = ["dist", "node_modules", "skill", "commands", "examples"];
+
+/**
+ * Copy a self-contained snapshot of the package (dist, node_modules, and
+ * packaged resource dirs) from `packageRoot` into `daemonDir`, then return
+ * the absolute path to the staged dist/cli.js.
+ *
+ * Each top-level dir is removed and recopied so re-installs are idempotent.
+ * `dist` and `node_modules` must exist; the resource dirs are optional.
+ */
+export function stageDaemon(packageRoot: string, daemonDir: string): string {
+  mkdirSync(daemonDir, { recursive: true });
+
+  for (const name of STAGED_RESOURCE_DIRS) {
+    const src = join(packageRoot, name);
+    const dest = join(daemonDir, name);
+    if (!existsSync(src)) {
+      // dist / node_modules are required; resource dirs are optional.
+      if (name === "dist" || name === "node_modules") {
+        throw new Error(
+          `Cannot stage daemon: required directory "${name}" not found in ${packageRoot}`
+        );
+      }
+      continue;
+    }
+    rmSync(dest, { recursive: true, force: true });
+    cpSync(src, dest, { recursive: true });
+  }
+
+  const cliPath = join(daemonDir, "dist", "cli.js");
+  if (!existsSync(cliPath)) {
+    throw new Error(`Staged daemon is missing dist/cli.js at ${cliPath}`);
+  }
+  return cliPath;
+}
+
 function getHome(): string {
   return process.env.HOME ?? process.env.USERPROFILE ?? "";
 }
@@ -102,7 +239,9 @@ function generateLaunchdPlist(
   schedulerPath: string
 ): string {
   const logDir = getLogDir();
-  const currentPath = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+  const currentPath = sanitizePath(
+    process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"
+  );
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -135,8 +274,13 @@ function generateLaunchdPlist(
 }
 
 async function installLaunchd(): Promise<void> {
-  const bunPath = process.execPath;
-  const schedulerPath = resolveSchedulerPath();
+  const bunPath = resolveAndValidateBunPath();
+  // Stage a self-contained copy of the daemon into a stable app-support dir,
+  // then point the plist at the staged cli.js -- never at a volatile bunx
+  // temp dir or the source checkout.
+  const packageRoot = resolvePackageRoot();
+  const daemonDir = getDaemonDir();
+  const schedulerPath = stageDaemon(packageRoot, daemonDir);
   const plistPath = getLaunchdPlistPath();
 
   // Ensure LaunchAgents directory exists
@@ -159,6 +303,7 @@ async function installLaunchd(): Promise<void> {
   console.log("Scheduler installed (macOS launchd)");
   console.log(`  Plist: ${plistPath}`);
   console.log(`  Bun:   ${bunPath}`);
+  console.log(`  Daemon: ${daemonDir}`);
   console.log(`  Script: ${schedulerPath}`);
   console.log(`  Interval: every 60 seconds`);
   console.log(`  Logs: ${getLogDir()}/scheduler.{log,err}`);
@@ -197,7 +342,9 @@ function generateSystemdService(
   bunPath: string,
   schedulerPath: string
 ): string {
-  const currentPath = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+  const currentPath = sanitizePath(
+    process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"
+  );
 
   return `[Unit]
 Description=OpenCode Scheduled Tasks Runner
@@ -225,8 +372,12 @@ WantedBy=timers.target
 }
 
 async function installSystemd(): Promise<void> {
-  const bunPath = process.execPath;
-  const schedulerPath = resolveSchedulerPath();
+  const bunPath = resolveAndValidateBunPath();
+  // Stage a self-contained copy of the daemon into a stable app-support dir,
+  // then point the unit at the staged cli.js (see installLaunchd).
+  const packageRoot = resolvePackageRoot();
+  const daemonDir = getDaemonDir();
+  const schedulerPath = stageDaemon(packageRoot, daemonDir);
   const systemdDir = getSystemdDir();
 
   mkdirSync(systemdDir, { recursive: true });
@@ -256,6 +407,7 @@ async function installSystemd(): Promise<void> {
   console.log(`  Service: ${servicePath}`);
   console.log(`  Timer:   ${timerPath}`);
   console.log(`  Bun:     ${bunPath}`);
+  console.log(`  Daemon:  ${daemonDir}`);
   console.log(`  Script:  ${schedulerPath}`);
   console.log(`  Interval: every 60 seconds`);
 }
