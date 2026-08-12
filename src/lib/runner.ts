@@ -3,6 +3,40 @@ import type { TaskDatabase } from "./db.js";
 import type { TaskExecConfig } from "./types.js";
 import { expandPath } from "./tasks.js";
 
+const TERMINATION_GRACE_MS = 10_000;
+
+export function hasTaskRunTimedOut(
+  startedAt: string,
+  timeoutMs: number,
+  now: Date = new Date()
+): boolean {
+  return now.getTime() - new Date(startedAt).getTime() > timeoutMs;
+}
+
+export function getDescendantPids(
+  rootPid: number,
+  processTable: string
+): number[] {
+  const children = new Map<number, number[]>();
+  for (const line of processTable.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+  }
+
+  const descendants: number[] = [];
+  const visit = (pid: number): void => {
+    for (const child of children.get(pid) ?? []) {
+      visit(child);
+      descendants.push(child);
+    }
+  };
+  visit(rootPid);
+  return descendants;
+}
+
 /**
  * Extract a session ID from a single parsed JSON event, if present.
  * Returns undefined if the event doesn't contain a session ID in any
@@ -142,6 +176,7 @@ export async function execTaskAndUpdateDb(
   const { args, env, cwd } = buildTaskCommand(task, db);
 
   let sessionId: string | undefined;
+  let timedOut = false;
 
   const onSessionId = (sid: string): void => {
     if (sessionId) return;
@@ -170,10 +205,31 @@ export async function execTaskAndUpdateDb(
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
 
     let stdoutBuffer = "";
     let stderr = "";
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    const terminateChild = (signal: NodeJS.Signals): void => {
+      if (!child.pid) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        child.kill(signal);
+      }
+    };
+    const timeoutTimer = task.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          stderr += `Task timed out after ${task.timeoutMs}ms`;
+          terminateChild("SIGTERM");
+          forceKillTimer = setTimeout(
+            () => terminateChild("SIGKILL"),
+            TERMINATION_GRACE_MS
+          );
+        }, task.timeoutMs)
+      : undefined;
 
     child.stdout.on("data", (data: Buffer) => {
       stdoutBuffer += data.toString();
@@ -198,6 +254,8 @@ export async function execTaskAndUpdateDb(
     });
 
     child.on("close", (code) => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       // Flush any final line that wasn't terminated by a newline.
       if (!sessionId && stdoutBuffer.trim()) {
         try {
@@ -211,11 +269,13 @@ export async function execTaskAndUpdateDb(
     });
 
     child.on("error", (err) => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       resolve({ stderr: err.message, exitCode: 1 });
     });
   });
 
-  const success = exitCode === 0;
+  const success = exitCode === 0 && !timedOut;
 
   // Final DB update with status and any error.
   if (isOneoff) {

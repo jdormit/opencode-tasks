@@ -3,6 +3,48 @@ import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import type { RecurringTask, TaskFrontmatter } from "./types.js";
 
+export const DEFAULT_TASK_TIMEOUT_MS = 60 * 60 * 1000;
+const MAX_TASK_TIMEOUT_MS = 2_147_483_647;
+
+const TIMEOUT_UNITS: Record<string, number> = {
+  ms: 1,
+  s: 1000,
+  m: 60 * 1000,
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+};
+
+/** Parse a duration string, or a numeric number of seconds, into milliseconds. */
+export function parseTimeout(value: unknown): number {
+  if (typeof value === "number") {
+    const timeoutMs = value * 1000;
+    if (
+      Number.isFinite(timeoutMs) &&
+      timeoutMs > 0 &&
+      timeoutMs <= MAX_TASK_TIMEOUT_MS
+    ) {
+      return timeoutMs;
+    }
+    throw new Error("Invalid timeout");
+  }
+
+  if (typeof value === "string") {
+    const match = value.match(/^(\d+)(ms|s|m|h|d)$/);
+    if (match) {
+      const timeoutMs = Number(match[1]) * TIMEOUT_UNITS[match[2]];
+      if (
+        timeoutMs > 0 &&
+        timeoutMs <= MAX_TASK_TIMEOUT_MS &&
+        Number.isSafeInteger(timeoutMs)
+      ) {
+        return timeoutMs;
+      }
+    }
+  }
+
+  throw new Error("Invalid timeout");
+}
+
 /**
  * Get the default tasks directory path
  */
@@ -55,6 +97,16 @@ function validateFrontmatter(
     errors.push("Invalid 'agent' field (must be a string)");
   }
 
+  if (data.timeout !== undefined) {
+    try {
+      parseTimeout(data.timeout);
+    } catch {
+      errors.push(
+        "Invalid 'timeout' field (must be a positive duration such as '30m' or numeric seconds)"
+      );
+    }
+  }
+
   if (data.enabled !== undefined && typeof data.enabled !== "boolean") {
     errors.push("Invalid 'enabled' field (must be a boolean)");
   }
@@ -88,6 +140,10 @@ export function parseTaskFile(filePath: string): RecurringTask {
     sessionName: fm.session_name,
     model: fm.model,
     agent: fm.agent,
+    timeoutMs:
+      fm.timeout === undefined
+        ? DEFAULT_TASK_TIMEOUT_MS
+        : parseTimeout(fm.timeout),
     permission: fm.permission,
     enabled: fm.enabled ?? true,
     prompt: body.trim(),

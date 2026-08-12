@@ -1,5 +1,9 @@
 import { describe, it, expect } from "bun:test";
-import { parseSessionIdFromJsonOutput } from "../runner.js";
+import {
+  getDescendantPids,
+  hasTaskRunTimedOut,
+  parseSessionIdFromJsonOutput,
+} from "../runner.js";
 
 describe("parseSessionIdFromJsonOutput", () => {
   it("extracts session ID from session.created event", () => {
@@ -34,5 +38,41 @@ some non-json output`;
 {"type":"session.created","properties":{"info":{"id":"ses_found"}}}
 Done.`;
     expect(parseSessionIdFromJsonOutput(output)).toBe("ses_found");
+  });
+});
+
+describe("hasTaskRunTimedOut", () => {
+  it("detects runs older than their configured timeout", () => {
+    expect(
+      hasTaskRunTimedOut(
+        "2026-08-12T10:00:00.000Z",
+        60 * 60 * 1000,
+        new Date("2026-08-12T11:00:00.001Z")
+      )
+    ).toBe(true);
+  });
+
+  it("allows runs at the timeout boundary", () => {
+    expect(
+      hasTaskRunTimedOut(
+        "2026-08-12T10:00:00.000Z",
+        60 * 60 * 1000,
+        new Date("2026-08-12T11:00:00.000Z")
+      )
+    ).toBe(false);
+  });
+});
+
+describe("getDescendantPids", () => {
+  it("returns descendants deepest-first", () => {
+    const processTable = `
+100 1
+110 100
+120 100
+111 110
+200 1
+`;
+
+    expect(getDescendantPids(100, processTable)).toEqual([111, 110, 120]);
   });
 });

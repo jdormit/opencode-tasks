@@ -1,13 +1,16 @@
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { TaskDatabase, getDefaultDbPath } from "./lib/db.js";
-import { readAllTasks } from "./lib/tasks.js";
+import { DEFAULT_TASK_TIMEOUT_MS, readAllTasks } from "./lib/tasks.js";
 import { isDue, getNextRunTime } from "./lib/cron.js";
 import {
   spawnWorker,
   isProcessAlive,
   execTaskAndUpdateDb,
+  getDescendantPids,
+  hasTaskRunTimedOut,
 } from "./lib/runner.js";
 import {
   install,
@@ -20,7 +23,7 @@ import {
   formatScheduledTaskMessage,
   ScheduleTaskError,
 } from "./lib/schedule.js";
-import type { TaskExecConfig } from "./lib/types.js";
+import type { RecurringTask, TaskExecConfig } from "./lib/types.js";
 
 /** Absolute path to this script (used to spawn worker subprocesses) */
 const SCHEDULER_PATH = fileURLToPath(import.meta.url);
@@ -33,10 +36,75 @@ const SCHEDULER_PATH = fileURLToPath(import.meta.url);
  * normally (and already updated the DB) or crashed. If the DB still
  * shows 'running', the worker crashed -- mark it as failed.
  */
-function reapWorkers(db: TaskDatabase): void {
+function isRecordedWorker(pid: number, runId: string): boolean {
+  try {
+    const command = execFileSync("/bin/ps", [
+      "-p",
+      String(pid),
+      "-o",
+      "command=",
+    ], { encoding: "utf8" });
+    return command.includes("--exec-task") && command.includes(runId);
+  } catch {
+    return false;
+  }
+}
+
+function killWorkerProcessTree(pid: number, runId: string): boolean {
+  if (!isProcessAlive(pid)) return true;
+  if (!isRecordedWorker(pid, runId)) return false;
+
+  try {
+    const processTable = execFileSync("/bin/ps", ["-axo", "pid=,ppid="], {
+      encoding: "utf8",
+    });
+    for (const descendant of getDescendantPids(pid, processTable)) {
+      try {
+        process.kill(-descendant, "SIGKILL");
+      } catch {
+        try {
+          process.kill(descendant, "SIGKILL");
+        } catch {
+          // It exited while its process tree was being terminated.
+        }
+      }
+    }
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    return !isProcessAlive(pid);
+  }
+
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; attempt < 10 && isProcessAlive(pid); attempt++) {
+    Atomics.wait(sleeper, 0, 0, 10);
+  }
+  return !isProcessAlive(pid);
+}
+
+function reapWorkers(db: TaskDatabase, tasks: RecurringTask[]): void {
   // Reap recurring task runs
   for (const run of db.getRunningTaskRuns()) {
     if (!run.pid) continue;
+    const timeoutMs =
+      tasks.find((task) => task.name === run.taskName)?.timeoutMs ??
+      DEFAULT_TASK_TIMEOUT_MS;
+    if (hasTaskRunTimedOut(run.startedAt, timeoutMs)) {
+      if (killWorkerProcessTree(run.pid, run.id)) {
+        db.completeTaskRun(run.id, "failed", {
+          error: `Task timed out after ${timeoutMs}ms`,
+        });
+        log(
+          `Terminated timed-out worker for "${run.taskName}" (PID ${run.pid})`,
+          "error"
+        );
+      } else {
+        log(
+          `Could not verify or terminate timed-out worker for "${run.taskName}" (PID ${run.pid})`,
+          "error"
+        );
+      }
+      continue;
+    }
     if (!isProcessAlive(run.pid)) {
       // Worker exited but didn't update DB -> it crashed
       db.completeTaskRun(run.id, "failed", {
@@ -78,11 +146,12 @@ function runTick(): void {
       log(`Cleaned up ${staleCount} stale running record(s)`);
     }
 
-    // Phase 2: Reap completed/crashed workers
-    reapWorkers(db);
+    const { tasks, errors } = readAllTasks();
+
+    // Phase 2: Reap completed, crashed, or timed-out workers
+    reapWorkers(db, tasks);
 
     // Phase 3: Check recurring tasks and spawn workers for due ones
-    const { tasks, errors } = readAllTasks();
     for (const { file, error } of errors) {
       log(`Error parsing task file "${file}": ${error}`, "error");
     }
@@ -167,9 +236,6 @@ async function execTask(runId: string, isOneoff: boolean): Promise<void> {
         permission: task.permission,
       };
     } else {
-      // For recurring tasks, we need to look up the task file by name
-      // The run ID maps to a task_runs record which has the task_name
-      const runs = db.getTaskRunHistory(runId, 1);
       // runId here is actually the task_runs.id, look it up directly
       const allRuns = db.getRunningTaskRuns();
       const run = allRuns.find((r) => r.id === runId);
@@ -190,6 +256,7 @@ async function execTask(runId: string, isOneoff: boolean): Promise<void> {
         sessionName: task.sessionName,
         model: task.model,
         agent: task.agent,
+        timeoutMs: task.timeoutMs,
         permission: task.permission,
       };
     }

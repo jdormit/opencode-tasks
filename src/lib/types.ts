@@ -28,6 +28,8 @@ export interface RecurringTask {
   model?: string;
   /** Agent to use */
   agent?: string;
+  /** Maximum run time in milliseconds */
+  timeoutMs: number;
   /** Permission config (same schema as opencode.json permission key) */
   permission?: PermissionConfig;
   /** Whether the task is active */
@@ -48,6 +50,8 @@ export interface TaskFrontmatter {
   session_name?: string;
   model?: string;
   agent?: string;
+  /** Maximum run time, as a duration string or seconds */
+  timeout?: string | number;
   permission?: PermissionConfig;
   enabled?: boolean;
 }
@@ -154,6 +158,8 @@ export interface TaskExecConfig {
   sessionName?: string;
   model?: string;
   agent?: string;
+  /** Maximum run time in milliseconds. Omitted for unbounded one-off tasks. */
+  timeoutMs?: number;
   permission?: PermissionConfig;
 }
 

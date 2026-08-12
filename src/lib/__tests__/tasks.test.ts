@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { parseTaskFile, readAllTasks, expandPath, setTaskEnabled } from "../tasks.js";
+import {
+  DEFAULT_TASK_TIMEOUT_MS,
+  parseTaskFile,
+  parseTimeout,
+  readAllTasks,
+  expandPath,
+  setTaskEnabled,
+} from "../tasks.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -51,6 +58,7 @@ Do the thing.
     expect(task.schedule).toBe("0 9 * * *");
     expect(task.cwd).toBe("~/projects");
     expect(task.sessionName).toBeUndefined();
+    expect(task.timeoutMs).toBe(DEFAULT_TASK_TIMEOUT_MS);
     expect(task.enabled).toBe(true);
     expect(task.prompt).toBe("Do the thing.");
     expect(task.filePath).toBe(filePath);
@@ -100,6 +108,7 @@ Do the thing.
 description: A full task
 schedule: "0 9 * * 1-5"
 cwd: ~/projects/app
+timeout: 90m
 session_name: my-session
 model: anthropic/claude-sonnet-4-6
 agent: build
@@ -117,6 +126,7 @@ Full prompt here.
     const task = parseTaskFile(filePath);
     expect(task.name).toBe("full-task");
     expect(task.sessionName).toBe("my-session");
+    expect(task.timeoutMs).toBe(90 * 60 * 1000);
     expect(task.model).toBe("anthropic/claude-sonnet-4-6");
     expect(task.agent).toBe("build");
     expect(task.permission).toEqual({
@@ -139,6 +149,54 @@ Missing fields.
     );
 
     expect(() => parseTaskFile(filePath)).toThrow("Invalid task file");
+  });
+
+  it("throws on an invalid timeout", () => {
+    const filePath = join(tmpDir, "bad-timeout.md");
+    writeFileSync(
+      filePath,
+      `---
+schedule: "0 9 * * *"
+cwd: /tmp
+timeout: forever
+---
+
+Prompt.
+`
+    );
+
+    expect(() => parseTaskFile(filePath)).toThrow(
+      "Invalid 'timeout' field"
+    );
+  });
+});
+
+describe("parseTimeout", () => {
+  it("parses duration strings", () => {
+    expect(parseTimeout("500ms")).toBe(500);
+    expect(parseTimeout("30s")).toBe(30_000);
+    expect(parseTimeout("15m")).toBe(15 * 60_000);
+    expect(parseTimeout("2h")).toBe(2 * 60 * 60_000);
+    expect(parseTimeout("1d")).toBe(24 * 60 * 60_000);
+  });
+
+  it("treats numbers as seconds", () => {
+    expect(parseTimeout(90)).toBe(90_000);
+  });
+
+  it("rejects invalid values", () => {
+    for (const value of [
+      0,
+      -1,
+      "",
+      "1 hour",
+      "1.5h",
+      "0s",
+      "25d",
+      true,
+    ]) {
+      expect(() => parseTimeout(value)).toThrow("Invalid timeout");
+    }
   });
 });
 

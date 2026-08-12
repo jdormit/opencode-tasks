@@ -437,6 +437,7 @@ cwd: ~/projects/my-app       # Required. Working directory (~ is expanded)
 session_name: daily-cleanup   # Optional. Reuses the same session across runs. Omit for fresh session each run.
 model: anthropic/claude-sonnet-4-6  # Optional. Model to use
 agent: build                  # Optional. Agent to use
+timeout: 1h                  # Optional. Maximum run time; default: 1h. Numbers are seconds.
 permission:                   # Optional. Same format as opencode.json permissions
   bash:
     "*": "allow"

@@ -114,6 +114,8 @@ Key parameters:
 
 Recurring tasks are markdown files in `~/.config/opencode/tasks/`. Use `get_task_instructions` to get the full frontmatter format, then create the file using file tools.
 
+Runs time out after one hour by default. Set `timeout` in task frontmatter to a positive duration such as `30m`, `2h`, or `1d`; numeric values are interpreted as seconds.
+
 Key points:
 - The filename (without `.md`) is the task name (e.g., `daily-cleanup.md` -> task name `daily-cleanup`)
 - `schedule` is a 5-field cron expression (minute hour day-of-month month day-of-week)

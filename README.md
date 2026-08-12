@@ -70,6 +70,7 @@ The file has YAML frontmatter followed by the prompt that gets sent to the agent
 | `session_name` | string | no | — | If set, reuses the same session across runs. If omitted, creates a fresh session each run. |
 | `model` | string | no | user default | Model in `provider/model` format (e.g., `anthropic/claude-sonnet-4-6`). |
 | `agent` | string | no | user default | Agent to use. |
+| `timeout` | duration or number | no | `1h` | Maximum run time. Use a duration such as `30m`, `2h`, or `1d`; numbers are interpreted as seconds. |
 | `permission` | object | no | opencode defaults | Permission config. Same schema as the `permission` key in `opencode.json`. See [Permissions](#permissions). |
 | `enabled` | boolean | no | `true` | Set to `false` to temporarily disable without deleting. |
 
