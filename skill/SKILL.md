@@ -14,6 +14,9 @@ You have access to tools for scheduling OpenCode tasks. Tasks can be one-off (ru
 - `cancel_task` - Cancel a pending one-off task or disable a recurring task
 - `task_history` - Get execution history for a task
 - `get_task_instructions` - Get the full frontmatter format for recurring task files
+- `start_loop` - Start a recurring prompt in the current session
+- `list_loops` - List active loops in the current session
+- `stop_loop` - Stop one loop by ID
 
 ## Permissions for Scheduled Tasks
 
@@ -148,9 +151,9 @@ If the daemon is not installed, warn the user and suggest they install it.
 
 ## Session Loops (`/loop`)
 
-There's a third scheduling primitive aimed at the active user session: `/loop`. Unlike recurring or one-off tasks (which spawn new `opencode run` subprocesses), a session loop fires a prompt **into the session that created it**, on a fixed interval.
+There's a third scheduling primitive aimed at the active user session: session loops. Unlike recurring or one-off tasks (which spawn new `opencode run` subprocesses), a session loop fires a prompt **into the session that created it**, on a fixed interval.
 
-Use `/loop` when the user wants something to happen *while they're working* in the current opencode session — polling a deployment, watching CI, repeatedly checking a long-running script. Use a recurring task or `schedule_task` when the work should happen in the background regardless of whether the user is around.
+Use a session loop when the user wants something to happen *while they're working* in the current opencode session — polling a deployment, watching CI, repeatedly checking a long-running script. Use a recurring task or `schedule_task` when the work should happen in the background regardless of whether the user is around.
 
 Slash commands (installed via `bunx opencode-tasks --install-commands` or `--install-skill`):
 
@@ -167,4 +170,4 @@ Interval format is `<N><unit>` where unit is `m` (1–59 minutes), `h` (1–23 h
 
 Loops have a 3-day default expiry, survive `opencode --resume`, and are automatically deleted when the session is deleted.
 
-**The user invokes `/loop` themselves.** You don't have a tool for it — it's a CLI feature, not an agent feature. If a user asks you to "loop" something, point them at the `/loop` command.
+Use `start_loop` when the user asks you to run something repeatedly in the current session. Use `list_loops` to get loop IDs and `stop_loop` to stop one loop. `stop_loop` always requires an ID; call `list_loops` first if you don't have it. Users can manage the same loops with the `/loop`, `/loop-list`, and `/loop-stop` slash commands.

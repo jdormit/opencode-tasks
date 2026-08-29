@@ -15,14 +15,17 @@
 import type { TaskDatabase } from "./db.js";
 import {
   parseLoopArgs,
-  intervalToCron,
-  defaultExpiry,
   formatLoopConfirmation,
   formatLoopStopped,
   formatLoopList,
-  LoopArgError,
 } from "./loops.js";
 import { LoopRuntime, type LoopLogger } from "./loop-runtime.js";
+import {
+  listActiveLoops,
+  startLoop,
+  stopAllLoops,
+  stopLoopById,
+} from "./loop-actions.js";
 
 /**
  * Fallback prompt used when the user invokes `/loop` with no prompt
@@ -139,28 +142,22 @@ export function handleLoopCommand(
     return { visible: `Error: ${err.message}`, context: errorContext(err.message) };
   }
 
-  let cron: string;
-  try {
-    cron = intervalToCron(parsed.intervalLabel).cron;
-  } catch (err: any) {
-    if (err instanceof LoopArgError) {
-      return { visible: `Error: ${err.message}`, context: errorContext(err.message) };
-    }
-    throw err;
-  }
-
   const prompt = parsed.promptOmitted ? LOOP_DEFAULT_PROMPT : parsed.prompt;
-
-  const loop = db.createSessionLoop({
+  const result = startLoop({
+    db,
+    runtime,
     sessionId,
-    prompt,
-    schedule: cron,
-    intervalLabel: parsed.intervalLabel,
     cwd,
-    expiresAt: defaultExpiry(),
+    intervalLabel: parsed.intervalLabel,
+    prompt,
   });
-
-  runtime.armNewLoop(loop);
+  if (result.kind === "invalid") {
+    return {
+      visible: `Error: ${result.message}`,
+      context: errorContext(result.message),
+    };
+  }
+  const loop = result.loop;
 
   const label = loop.intervalLabel ?? loop.schedule;
   const context = parsed.promptOmitted
@@ -184,11 +181,8 @@ export function handleLoopStopCommand(
   const trimmed = (args ?? "").trim();
 
   if (!trimmed) {
-    const enabled = db.listEnabledLoopsForSession(sessionId);
-    for (const loop of enabled) {
-      runtime.clearLoop(loop.id);
-    }
-    db.disableLoopsForSession(sessionId);
+    const result = stopAllLoops(db, runtime, sessionId);
+    const enabled = result.kind === "stopped" ? result.loops : [];
     const visible = formatLoopStopped(enabled);
     let context: string;
     if (enabled.length === 0) {
@@ -201,36 +195,34 @@ export function handleLoopStopCommand(
     return { visible, context };
   }
 
-  // Match by full id, or by short prefix (>=8 chars) for convenience.
-  const all = db.listLoopsForSession(sessionId);
-  const candidates = all.filter(
-    (l) => l.id === trimmed || (trimmed.length >= 8 && l.id.startsWith(trimmed))
-  );
-
-  if (candidates.length === 0) {
+  const result = stopLoopById(db, runtime, sessionId, trimmed);
+  if (result.kind === "not-found") {
     const visible = `No loop matching "${trimmed}" in this session. Run /loop-list to see active loops.`;
     return {
       visible,
       context: `tried to /loop-stop "${trimmed}" but no matching loop exists in this session`,
     };
   }
-  if (candidates.length > 1) {
-    const visible = `Ambiguous id "${trimmed}" matches ${candidates.length} loops; provide more characters.`;
+  if (result.kind === "ambiguous") {
+    const visible = `Ambiguous id "${trimmed}" matches ${result.matches.length} loops; provide more characters.`;
     return {
       visible,
-      context: `tried to /loop-stop "${trimmed}" but it matched ${candidates.length} loops ambiguously`,
+      context: `tried to /loop-stop "${trimmed}" but it matched ${result.matches.length} loops ambiguously`,
     };
   }
-
-  const loop = candidates[0];
-  if (!loop.enabled) {
+  if (result.kind === "already-stopped") {
     return {
-      visible: `Loop ${loop.id} is already stopped.`,
+      visible: `Loop ${result.loop.id} is already stopped.`,
       context: `tried to /loop-stop a loop that was already stopped`,
     };
   }
-  runtime.clearLoop(loop.id);
-  db.disableSessionLoop(loop.id);
+  if (result.kind !== "stopped") {
+    return {
+      visible: "No active loops to stop.",
+      context: "ran /loop-stop but there were no active loops to stop",
+    };
+  }
+  const loop = result.loops[0];
   const label = loop.intervalLabel ?? loop.schedule;
   return {
     visible: formatLoopStopped([loop]),
@@ -244,9 +236,10 @@ export function handleLoopStopCommand(
  */
 export function handleLoopListCommand(
   sessionId: string,
-  db: TaskDatabase
+  db: TaskDatabase,
+  runtime?: LoopRuntime
 ): LoopCommandReply {
-  const loops = db.listEnabledLoopsForSession(sessionId);
+  const loops = listActiveLoops(db, sessionId, runtime);
   const visible = formatLoopList(loops);
   const context =
     loops.length === 0

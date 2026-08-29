@@ -198,7 +198,7 @@ export function isExpired(loop: SessionLoop, now: Date = new Date()): boolean {
 
 export function formatLoopConfirmation(
   loop: SessionLoop,
-  opts?: { schedulerWarning?: string }
+  opts?: { schedulerWarning?: string; stopHint?: string }
 ): string {
   const lines = [
     `Loop scheduled.`,
@@ -210,7 +210,7 @@ export function formatLoopConfirmation(
     lines.push(`  Expires: ${loop.expiresAt}`);
   }
   lines.push(
-    `  Stop with: /loop-stop ${loop.id}  (or /loop-stop to stop all loops in this session)`
+    `  ${opts?.stopHint ?? `Stop with: /loop-stop ${loop.id}  (or /loop-stop to stop all loops in this session)`}`
   );
   if (opts?.schedulerWarning) {
     lines.push("");
@@ -233,9 +233,12 @@ export function formatLoopStopped(loops: SessionLoop[]): string {
   return lines.join("\n");
 }
 
-export function formatLoopList(loops: SessionLoop[]): string {
+export function formatLoopList(
+  loops: SessionLoop[],
+  opts?: { emptyHint?: string }
+): string {
   if (loops.length === 0) {
-    return "No active loops in this session. Use `/loop <interval> <prompt>` to start one.";
+    return `No active loops in this session. ${opts?.emptyHint ?? "Use `/loop <interval> <prompt>` to start one."}`;
   }
   const lines = [`Active loops (${loops.length}):`];
   for (const l of loops) {

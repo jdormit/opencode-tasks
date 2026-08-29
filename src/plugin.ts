@@ -16,6 +16,11 @@ import {
   handleLoopListCommand,
   handleLoopEvent,
 } from "./lib/loop-commands.js";
+import {
+  executeListLoopsTool,
+  executeStartLoopTool,
+  executeStopLoopTool,
+} from "./lib/loop-tools.js";
 
 
 function getDb(): TaskDatabase {
@@ -352,6 +357,53 @@ export const ScheduledTasksPlugin: Plugin = async (ctx) => {
         },
       }),
 
+      start_loop: tool({
+        description:
+          "Start a recurring prompt in the current session. Use this for in-session polling or repeated work that should run only while OpenCode is open. Loops expire after 3 days by default.",
+        args: {
+          prompt: tool.schema.string(
+            "The prompt to send to this session each time the loop runs"
+          ),
+          interval: tool.schema
+            .string()
+            .optional()
+            .describe(
+              "Interval as a number plus m, h, or d (for example 5m, 2h, or 1d). Defaults to 5m."
+            ),
+        },
+        async execute(args, context) {
+          loopRuntime.ensureSessionArmed(context.sessionID);
+          return executeStartLoopTool(args, context, loopDb, loopRuntime);
+        },
+      }),
+
+      list_loops: tool({
+        description:
+          "List active recurring loops in the current session, including their IDs, intervals, prompts, and expiry times.",
+        args: {},
+        async execute(_args, context) {
+          loopRuntime.ensureSessionArmed(context.sessionID);
+          return executeListLoopsTool(context, loopDb, loopRuntime);
+        },
+      }),
+
+      stop_loop: tool({
+        description:
+          "Stop one recurring loop in the current session by ID. Call list_loops first if you do not know the loop ID.",
+        args: {
+          id: tool.schema
+            .string()
+            .min(8)
+            .describe(
+              "The full loop ID or an unambiguous prefix of at least 8 characters"
+            ),
+        },
+        async execute(args, context) {
+          loopRuntime.ensureSessionArmed(context.sessionID);
+          return executeStopLoopTool(args, context, loopDb, loopRuntime);
+        },
+      }),
+
       task_history: tool({
         description:
           "Get the execution history for a scheduled task. Shows recent runs with status, timing, and any errors.",
@@ -513,7 +565,7 @@ Common examples:
 
 - **Recurring task** (markdown file): runs in a *fresh* opencode subprocess on a cron schedule. Good for background work that should run whether or not the user is in opencode.
 - **One-off task** (\`schedule_task\` tool): runs once in a fresh subprocess. Good for "remind me at 3pm" or "run this once tomorrow."
-- **\`/loop\`** (slash command, not a tool): posts a recurring prompt into the *current user session*. Good for in-session polling — checking CI, deploys, file watchers. Only fires while the session is open. The user invokes this themselves; you do not have a tool for it.${schedulerWarning()}`;
+- **Session loop** (\`start_loop\`, \`list_loops\`, and \`stop_loop\` tools, or the \`/loop*\` slash commands): posts a recurring prompt into the *current user session*. Good for in-session polling — checking CI, deploys, and file watchers. Only fires while the session is open.${schedulerWarning()}`;
         },
       }),
     },
@@ -564,7 +616,7 @@ Common examples:
             loopRuntime
           );
         } else if (command === "loop-list") {
-          reply = handleLoopListCommand(sessionId, loopDb);
+          reply = handleLoopListCommand(sessionId, loopDb, loopRuntime);
         }
         if (reply !== undefined) {
           replaceParts(output, commandReplyParts(reply));

@@ -146,6 +146,9 @@ The agent has access to these tools:
 | `cancel_task` | Cancel a pending one-off task or disable a recurring task |
 | `task_history` | View execution history for a task |
 | `get_task_instructions` | Get the full frontmatter format for recurring tasks |
+| `start_loop` | Start a recurring prompt in the current session |
+| `list_loops` | List active loops in the current session |
+| `stop_loop` | Stop one loop by ID |
 
 Example agent interaction:
 
@@ -155,7 +158,7 @@ The agent will call `schedule_task` with the appropriate prompt, time, working d
 
 ## Session loops (`/loop`)
 
-`/loop` schedules a recurring prompt that fires **inside the current session** on a fixed interval. It's modeled after Claude Code's `/loop` and is meant for in-session automation: polling a deployment, waiting on CI, watching a long-running process. Unlike recurring/one-off tasks, loops post into the active opencode session and don't spawn new ones.
+Session loops schedule recurring prompts that fire **inside the current session** on a fixed interval. They are meant for in-session automation: polling a deployment, waiting on CI, or watching a long-running process. Unlike recurring and one-off tasks, loops post into the active opencode session and don't spawn new ones. Agents manage them with `start_loop`, `list_loops`, and `stop_loop`; users can also manage them with slash commands.
 
 Install the slash commands the first time (also installed by `--install-skill`):
 
@@ -190,7 +193,7 @@ Interval format: `<N><unit>` where unit is `m` (minutes, 1â€“59), `h` (hours, 1â
 | Driver | OS scheduler daemon (launchd/systemd) | Plugin in-process timers |
 | Requires opencode open? | No | Yes |
 | Survives restart? | Yes | Yes (re-armed via `--resume`) |
-| Defined by | Markdown file in `~/.config/opencode/tasks/` | `/loop` slash command |
+| Defined by | Markdown file in `~/.config/opencode/tasks/` | Agent tools or `/loop` slash command |
 
 ## Permissions
 
