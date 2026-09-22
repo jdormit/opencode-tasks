@@ -234,14 +234,45 @@ function getLaunchdPlistPath(): string {
   );
 }
 
-function generateLaunchdPlist(
+const PASSTHROUGH_ENV_VARS = ["OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"];
+
+/**
+ * Environment baked into the service definition. opencode reads
+ * OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS at server startup, so it must be
+ * present in the daemon's environment for task runs to get background subagents.
+ */
+export function serviceEnvironment(
+  env: Record<string, string | undefined> = process.env
+): Record<string, string> {
+  const result: Record<string, string> = {
+    PATH: sanitizePath(env.PATH ?? "/usr/local/bin:/usr/bin:/bin"),
+  };
+  for (const name of PASSTHROUGH_ENV_VARS) {
+    const value = env[name];
+    if (value !== undefined) result[name] = value;
+  }
+  return result;
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+export function generateLaunchdPlist(
   bunPath: string,
-  schedulerPath: string
+  schedulerPath: string,
+  logDir: string,
+  env: Record<string, string>
 ): string {
-  const logDir = getLogDir();
-  const currentPath = sanitizePath(
-    process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"
-  );
+  const envEntries = Object.entries(env)
+    .map(
+      ([key, value]) =>
+        `    <key>${escapeXml(key)}</key>\n    <string>${escapeXml(value)}</string>`
+    )
+    .join("\n");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -266,8 +297,7 @@ function generateLaunchdPlist(
   <true/>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key>
-    <string>${currentPath}</string>
+${envEntries}
   </dict>
 </dict>
 </plist>`;
@@ -293,8 +323,9 @@ async function installLaunchd(): Promise<void> {
     // Not loaded, that's fine
   }
 
-  // Write plist
-  const plist = generateLaunchdPlist(bunPath, schedulerPath);
+  const logDir = getLogDir();
+  const env = serviceEnvironment();
+  const plist = generateLaunchdPlist(bunPath, schedulerPath, logDir, env);
   writeFileSync(plistPath, plist);
 
   // Load
@@ -305,8 +336,9 @@ async function installLaunchd(): Promise<void> {
   console.log(`  Bun:   ${bunPath}`);
   console.log(`  Daemon: ${daemonDir}`);
   console.log(`  Script: ${schedulerPath}`);
+  console.log(`  Env:   ${Object.keys(env).join(", ")}`);
   console.log(`  Interval: every 60 seconds`);
-  console.log(`  Logs: ${getLogDir()}/scheduler.{log,err}`);
+  console.log(`  Logs: ${logDir}/scheduler.{log,err}`);
 }
 
 async function uninstallLaunchd(): Promise<void> {
@@ -338,13 +370,14 @@ function getSystemdDir(): string {
   return join(getHome(), ".config", "systemd", "user");
 }
 
-function generateSystemdService(
+export function generateSystemdService(
   bunPath: string,
-  schedulerPath: string
+  schedulerPath: string,
+  env: Record<string, string>
 ): string {
-  const currentPath = sanitizePath(
-    process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"
-  );
+  const envLines = Object.entries(env)
+    .map(([key, value]) => `Environment=${key}=${value}\n`)
+    .join("");
 
   return `[Unit]
 Description=OpenCode Scheduled Tasks Runner
@@ -353,8 +386,7 @@ Description=OpenCode Scheduled Tasks Runner
 Type=oneshot
 KillMode=process
 ExecStart=${bunPath} ${schedulerPath} --run-once
-Environment=PATH=${currentPath}
-`;
+${envLines}`;
 }
 
 function generateSystemdTimer(): string {
@@ -395,7 +427,8 @@ async function installSystemd(): Promise<void> {
   }
 
   // Write unit files
-  writeFileSync(servicePath, generateSystemdService(bunPath, schedulerPath));
+  const env = serviceEnvironment();
+  writeFileSync(servicePath, generateSystemdService(bunPath, schedulerPath, env));
   writeFileSync(timerPath, generateSystemdTimer());
 
   // Reload, enable, start
@@ -409,6 +442,7 @@ async function installSystemd(): Promise<void> {
   console.log(`  Bun:     ${bunPath}`);
   console.log(`  Daemon:  ${daemonDir}`);
   console.log(`  Script:  ${schedulerPath}`);
+  console.log(`  Env:     ${Object.keys(env).join(", ")}`);
   console.log(`  Interval: every 60 seconds`);
 }
 

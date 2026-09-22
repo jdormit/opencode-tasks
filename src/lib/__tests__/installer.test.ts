@@ -4,6 +4,9 @@ import {
   sanitizePath,
   getDaemonDir,
   stageDaemon,
+  serviceEnvironment,
+  generateLaunchdPlist,
+  generateSystemdService,
 } from "../installer.js";
 import {
   mkdtempSync,
@@ -46,6 +49,64 @@ describe("sanitizePath", () => {
   it("handles empty entries gracefully", () => {
     const input = "/usr/bin::/bin";
     expect(sanitizePath(input)).toBe("/usr/bin:/bin");
+  });
+});
+
+describe("serviceEnvironment", () => {
+  it("passes through the background subagents flag with a sanitized PATH", () => {
+    const env = serviceEnvironment({
+      PATH: "/tmp/bunx-501-foo/node_modules/.bin:/usr/bin",
+      OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "true",
+      OPENCODE_CONFIG: "/Users/test/opencode.emacs.jsonc",
+    });
+    expect(env).toEqual({
+      PATH: "/usr/bin",
+      OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "true",
+    });
+  });
+
+  it("omits the background subagents flag when it is unset", () => {
+    expect(serviceEnvironment({ PATH: "/usr/bin" })).toEqual({
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("falls back to a default PATH", () => {
+    expect(serviceEnvironment({})).toEqual({
+      PATH: "/usr/local/bin:/usr/bin:/bin",
+    });
+  });
+});
+
+describe("service unit generation", () => {
+  const env = {
+    PATH: "/usr/bin",
+    OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "true",
+  };
+
+  it("writes every service environment variable into the launchd plist", () => {
+    const plist = generateLaunchdPlist("/bin/bun", "/d/cli.js", "/logs", env);
+    expect(plist).toContain(
+      "<key>PATH</key>\n    <string>/usr/bin</string>"
+    );
+    expect(plist).toContain(
+      "<key>OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS</key>\n    <string>true</string>"
+    );
+  });
+
+  it("escapes XML special characters in launchd environment values", () => {
+    const plist = generateLaunchdPlist("/bin/bun", "/d/cli.js", "/logs", {
+      PATH: "/a&b/<c>",
+    });
+    expect(plist).toContain("<string>/a&amp;b/&lt;c&gt;</string>");
+  });
+
+  it("writes every service environment variable into the systemd unit", () => {
+    const unit = generateSystemdService("/bin/bun", "/d/cli.js", env);
+    expect(unit).toContain("Environment=PATH=/usr/bin\n");
+    expect(unit).toContain(
+      "Environment=OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\n"
+    );
   });
 });
 

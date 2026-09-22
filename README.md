@@ -30,6 +30,11 @@ only thing that matters is re-running `--install` after upgrading. The
 installer also resolves a stable absolute `bun` path (preferring the `mise`
 shim over a version-pinned `mise` install so bun upgrades don't break it).
 
+The service environment is captured from the shell you run `--install` in:
+`PATH`, plus `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` if it is set, so
+scheduled tasks can use opencode's background subagents. Re-run `--install`
+to pick up changes to either.
+
 ### 3. Install the agent skill (optional)
 
 This gives the agent context on how to use the scheduling tools, especially around permissions.
