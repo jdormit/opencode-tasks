@@ -20,8 +20,8 @@ The daemon runs every 60 seconds and executes any tasks that are due. It auto-de
 bunx opencode-tasks --install
 ```
 
-`--install` stages a self-contained copy of the daemon (its `dist/`, bundled
-`node_modules/`, and packaged resources) into `~/.local/share/opencode-tasks/`
+`--install` stages a self-contained copy of the daemon (its bundled `dist/`
+and packaged resources) into `~/.local/share/opencode-tasks/`
 and points the launchd plist / systemd unit at that copy. This makes the
 running daemon independent of how `opencode-tasks` was obtained — `bunx`,
 `bun add -g`, or a `bun link`'d checkout — so it won't break if a `bunx`

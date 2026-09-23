@@ -1,6 +1,6 @@
 {
   "name": "opencode-tasks",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Scheduled task runner plugin for OpenCode - cron-based recurring and one-off task scheduling",
   "type": "module",
   "main": "./dist/plugin.js",
@@ -26,7 +26,8 @@
     "dev": "tsup --watch",
     "prepublishOnly": "bun run build",
     "test": "bun test",
-    "test:watch": "bun test --watch"
+    "test:watch": "bun test --watch",
+    "pretest": "bun run build"
   },
   "keywords": [
     "opencode",

@@ -79,8 +79,8 @@ function resolveSchedulerPath(): string {
 }
 
 /**
- * Resolve the package root (the directory containing dist/, node_modules/,
- * skill/, commands/, examples/) from the resolved scheduler script path.
+ * Resolve the package root (the directory containing dist/, skill/,
+ * commands/, examples/) from the resolved scheduler script path.
  *
  * The scheduler lives at <root>/dist/cli.js, so the root is two levels up.
  */
@@ -177,15 +177,17 @@ export function getDaemonDir(
   return join(home, ".local", "share", "opencode-tasks");
 }
 
-const STAGED_RESOURCE_DIRS = ["dist", "node_modules", "skill", "commands", "examples"];
+const STAGED_RESOURCE_DIRS = ["dist", "skill", "commands", "examples"];
 
 /**
- * Copy a self-contained snapshot of the package (dist, node_modules, and
+ * Copy a self-contained snapshot of the package (the bundled dist and
  * packaged resource dirs) from `packageRoot` into `daemonDir`, then return
  * the absolute path to the staged dist/cli.js.
  *
  * Each top-level dir is removed and recopied so re-installs are idempotent.
- * `dist` and `node_modules` must exist; the resource dirs are optional.
+ * `dist` must exist; the resource dirs are optional. A node_modules dir left
+ * by older versions, which staged dependencies instead of bundling them, is
+ * removed.
  */
 export function stageDaemon(packageRoot: string, daemonDir: string): string {
   mkdirSync(daemonDir, { recursive: true });
@@ -194,10 +196,9 @@ export function stageDaemon(packageRoot: string, daemonDir: string): string {
     const src = join(packageRoot, name);
     const dest = join(daemonDir, name);
     if (!existsSync(src)) {
-      // dist / node_modules are required; resource dirs are optional.
-      if (name === "dist" || name === "node_modules") {
+      if (name === "dist") {
         throw new Error(
-          `Cannot stage daemon: required directory "${name}" not found in ${packageRoot}`
+          `Cannot stage daemon: required directory "dist" not found in ${packageRoot}`
         );
       }
       continue;
@@ -205,6 +206,7 @@ export function stageDaemon(packageRoot: string, daemonDir: string): string {
     rmSync(dest, { recursive: true, force: true });
     cpSync(src, dest, { recursive: true });
   }
+  rmSync(join(daemonDir, "node_modules"), { recursive: true, force: true });
 
   const cliPath = join(daemonDir, "dist", "cli.js");
   if (!existsSync(cliPath)) {

@@ -15,6 +15,7 @@ import {
   existsSync,
   readFileSync,
   rmSync,
+  copyFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -171,16 +172,12 @@ describe("resolveBunPath", () => {
 });
 
 describe("stageDaemon", () => {
-  // Build a fake package root with dist + node_modules + resource dirs.
+  // Package managers hoist dependencies out of the package root, so a fake
+  // root has no node_modules.
   function makePackageRoot(root: string): void {
     mkdirSync(join(root, "dist"), { recursive: true });
     writeFileSync(join(root, "dist", "cli.js"), "// cli");
     writeFileSync(join(root, "dist", "plugin.js"), "// plugin");
-    mkdirSync(join(root, "node_modules", "gray-matter"), { recursive: true });
-    writeFileSync(
-      join(root, "node_modules", "gray-matter", "index.js"),
-      "module.exports = {};"
-    );
     mkdirSync(join(root, "skill"), { recursive: true });
     writeFileSync(join(root, "skill", "SKILL.md"), "# skill");
     mkdirSync(join(root, "commands"), { recursive: true });
@@ -189,7 +186,7 @@ describe("stageDaemon", () => {
     writeFileSync(join(root, "examples", "example.md"), "# example");
   }
 
-  it("copies dist, node_modules, and resource dirs into the daemon dir", () => {
+  it("copies dist and resource dirs into the daemon dir", () => {
     const pkgRoot = join(tmpDir, "pkg");
     const daemonDir = join(tmpDir, "daemon");
     makePackageRoot(pkgRoot);
@@ -198,9 +195,6 @@ describe("stageDaemon", () => {
 
     expect(existsSync(join(daemonDir, "dist", "cli.js"))).toBe(true);
     expect(existsSync(join(daemonDir, "dist", "plugin.js"))).toBe(true);
-    expect(
-      existsSync(join(daemonDir, "node_modules", "gray-matter", "index.js"))
-    ).toBe(true);
     expect(existsSync(join(daemonDir, "skill", "SKILL.md"))).toBe(true);
     expect(existsSync(join(daemonDir, "commands", "loop.md"))).toBe(true);
     expect(existsSync(join(daemonDir, "examples", "example.md"))).toBe(true);
@@ -235,14 +229,48 @@ describe("stageDaemon", () => {
   it("skips resource dirs that are absent in the package root", () => {
     const pkgRoot = join(tmpDir, "pkg");
     const daemonDir = join(tmpDir, "daemon");
-    // Minimal root: only dist + node_modules, no skill/commands/examples.
     mkdirSync(join(pkgRoot, "dist"), { recursive: true });
     writeFileSync(join(pkgRoot, "dist", "cli.js"), "// cli");
-    mkdirSync(join(pkgRoot, "node_modules"), { recursive: true });
-    writeFileSync(join(pkgRoot, "node_modules", "placeholder"), "x");
 
     expect(() => stageDaemon(pkgRoot, daemonDir)).not.toThrow();
     expect(existsSync(join(daemonDir, "dist", "cli.js"))).toBe(true);
     expect(existsSync(join(daemonDir, "skill"))).toBe(false);
+  });
+
+  it("keeps an older staged node_modules when dist is missing", () => {
+    const pkgRoot = join(tmpDir, "pkg");
+    const daemonDir = join(tmpDir, "daemon");
+    mkdirSync(pkgRoot, { recursive: true });
+    mkdirSync(join(daemonDir, "node_modules"), { recursive: true });
+
+    expect(() => stageDaemon(pkgRoot, daemonDir)).toThrow();
+    expect(existsSync(join(daemonDir, "node_modules"))).toBe(true);
+  });
+
+  it("removes a node_modules dir left by an older staged install", () => {
+    const pkgRoot = join(tmpDir, "pkg");
+    const daemonDir = join(tmpDir, "daemon");
+    makePackageRoot(pkgRoot);
+    mkdirSync(join(daemonDir, "node_modules"), { recursive: true });
+
+    stageDaemon(pkgRoot, daemonDir);
+    expect(existsSync(join(daemonDir, "node_modules"))).toBe(false);
+  });
+});
+
+describe("built CLI", () => {
+  const builtCli = join(import.meta.dir, "..", "..", "..", "dist", "cli.js");
+
+  it("runs from a staged dir without node_modules", () => {
+    const staged = join(tmpDir, "dist");
+    mkdirSync(staged);
+    copyFileSync(builtCli, join(staged, "cli.js"));
+    const result = Bun.spawnSync(
+      [process.execPath, "--no-install", join(staged, "cli.js"), "--help"],
+      { cwd: tmpDir, env: { ...process.env, HOME: tmpDir } }
+    );
+    expect(result.stderr.toString()).toBe("");
+    expect(result.stdout.toString()).toContain("--install");
+    expect(result.exitCode).toBe(0);
   });
 });
